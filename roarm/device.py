@@ -43,7 +43,7 @@ class ArmDevice:
                  clock: Callable[[], float] = time.monotonic,
                  poll_interval: float = 0.05, tx_interval: float = 0.025,
                  boot_timeout: float = 15.0, boot_quiet: float = 2.0,
-                 reconnect_delay: float = 2.0):
+                 reconnect_delay: float = 2.0, jog_interval: float = 0.05):
         self.port = port
         self.baud = baud
         self.serial_factory = serial_factory
@@ -53,6 +53,7 @@ class ArmDevice:
         self.boot_timeout = boot_timeout
         self.boot_quiet = boot_quiet
         self.reconnect_delay = reconnect_delay
+        self.jog_interval = jog_interval
 
         self.on_state: Callable[[P.ArmState], None] = _noop
         self.on_line: Callable[[str, str], None] = _noop
@@ -71,6 +72,7 @@ class ArmDevice:
         self._thread: threading.Thread | None = None
         self._last_tx = float("-inf")
         self._last_poll = float("-inf")
+        self._last_target_tx = float("-inf")
         self._last_rx = 0.0
         self._boot_started = 0.0
 
@@ -175,8 +177,9 @@ class ArmDevice:
         with self._lock:
             if self._queue:
                 return self._queue.popleft()
-            if self._target is not None:
+            if self._target is not None and now - self._last_target_tx >= self.jog_interval:
                 cmd, self._target = self._target, None
+                self._last_target_tx = now
                 return cmd
         if now - self._last_poll >= self.poll_interval:
             self._last_poll = now

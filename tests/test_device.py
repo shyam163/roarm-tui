@@ -135,6 +135,20 @@ def test_tx_interval_limits_rate():
     assert len(fake.tx) == 1
 
 
+def test_jog_target_limited_to_20hz():
+    dev, fake, clock = make()
+    ready(dev, fake, clock)
+    for i in range(6):
+        dev.set_target(Pose(base=round(i * 0.1, 1)))
+        clock.advance(0.03); dev.step()      # above tx_interval, below jog_interval
+    sent = fake.sent()
+    jogs = [s for s in sent if s["T"] == 102]
+    polls = [s for s in sent if s["T"] == 105]
+    assert [round(j["base"], 1) for j in jogs] == [0.0, 0.2, 0.4]
+    assert len(polls) == 3
+    assert [s["T"] for s in sent] == [102, 105, 102, 105, 102, 105]
+
+
 def test_clear_queue():
     dev, fake, clock = make()
     ready(dev, fake, clock)
