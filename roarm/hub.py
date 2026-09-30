@@ -36,6 +36,9 @@ class DeviceHub:
         dev.on_status = lambda t, n=name: self._relay(n, "on_status", t)
 
     def _relay(self, name: str, callback: str, *args) -> None:
+        # self.active is re-read here, at call time, so a callback racing a
+        # concurrent switch() is classified against whichever transport is
+        # current when it actually arrives, not when it was scheduled.
         if name == self.active:
             getattr(self, callback)(*args)
 
@@ -71,6 +74,7 @@ class DeviceHub:
             dev.start()
 
     def stop(self) -> None:
+        self._started = False
         for dev in self.devices.values():
             dev.stop()
 

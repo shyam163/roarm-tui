@@ -84,3 +84,12 @@ def test_add_wires_and_starts_when_running():
         assert seen[0] == "switched:wifi" and "online" in seen
     finally:
         hub.stop()
+
+
+def test_add_after_stop_does_not_start():
+    hub = DeviceHub({"usb": SimDevice(boot_time=0.0, rate=100)}, "usb")
+    hub.start()
+    hub.stop()
+    late = SimDevice(boot_time=0.0, rate=100)
+    hub.add("wifi", late)
+    assert late._thread is None
