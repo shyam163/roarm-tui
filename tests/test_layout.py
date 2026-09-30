@@ -60,6 +60,7 @@ async def test_teach_capture_row_fully_onscreen(tmp_path, size):
         app.query_one("TabbedContent").active = "tab-teach"
         await pilot.pause()
         assert_onscreen(app, "#wp-capture", size)
+        assert_onscreen(app, "#wp-clear", size)
 
 
 @pytest.mark.parametrize("size", SIZES)

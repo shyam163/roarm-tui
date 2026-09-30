@@ -120,6 +120,18 @@ LoadBars {
     width: 1fr;
 }
 
+/* Waypoint buttons: first row shares the width evenly so "Clear all" is never clipped at 80 cols. */
+#wp-panel .row Button {
+    min-width: 6;
+}
+
+#wp-panel #wp-capture, #wp-panel #wp-delete, #wp-panel #wp-clear {
+    padding: 0;
+    margin-right: 0;
+    width: auto;
+    min-width: 0;
+}
+
 Button.small {
     min-width: 5;
     width: 5;

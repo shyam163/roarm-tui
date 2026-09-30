@@ -11,6 +11,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import Button, Checkbox, DataTable, Input, Select, Static
 
 from roarm import protocol as P
+from roarm.ui.widgets import ConfirmScreen
 from roarm.sequence import Point, Sequence, list_sequences, load, save
 
 SPEEDS = [("×0.25", 0.25), ("×0.5", 0.5), ("×1", 1.0), ("×1.5", 1.5), ("×2", 2.0)]
@@ -29,8 +30,10 @@ class TeachTab(Container):
             with Vertical(id="wp-panel", classes="panel"):
                 yield DataTable(id="wp-table", cursor_type="row", zebra_stripes=True)
                 with Horizontal(classes="row"):
-                    yield Button("● Capture", id="wp-capture", variant="primary")
+                    yield Button("● Capture point", id="wp-capture", variant="primary")
                     yield Button("✕ Delete", id="wp-delete")
+                    yield Button("🗑 Clear all", id="wp-clear")
+                with Horizontal(classes="row"):
                     yield Button("▲", id="wp-up", classes="small")
                     yield Button("▼", id="wp-down", classes="small")
                     yield Input(placeholder="dwell s", id="wp-dwell", type="number", classes="small-input")
@@ -38,7 +41,7 @@ class TeachTab(Container):
             with Vertical(id="teach-side", classes="panel"):
                 yield Static("", id="seq-info")
                 yield Button(TORQUE_OFF_LABEL, id="teach-torque")
-                yield Button("⏺ Record", id="teach-record")
+                yield Button("⏺ Record path", id="teach-record")
                 with Horizontal(classes="row"):
                     yield Button("▶ Play", id="teach-play", variant="success")
                     yield Button("■ Stop", id="teach-stop")
@@ -74,7 +77,7 @@ class TeachTab(Container):
 
     def refresh_status(self) -> None:
         self.query_one("#teach-record", Button).label = (
-            "⏹ Stop recording" if self.app.recorder is not None else "⏺ Record")
+            "⏹ Stop recording path" if self.app.recorder is not None else "⏺ Record path")
         seq = self.sequence
         t = Text()
         t.append(seq.name, style="bold")
@@ -84,6 +87,8 @@ class TeachTab(Container):
             t.append(f"\n▶ playing {player.index + 1}/{len(seq.points)}", style="bold #7dcfff")
         if self.app.recorder is not None:
             t.append(f"\n⏺ recording · {len(self.app.recorder.points)} samples", style="bold #f87171")
+        if not seq.points:
+            t.append("\nPress space or ● Capture point to add a waypoint", style="dim")
         self.query_one("#seq-info", Static).update(t)
 
     # --- table ---------------------------------------------------------------
@@ -113,6 +118,7 @@ class TeachTab(Container):
         handlers = {
             "wp-capture": self.app.action_capture,
             "wp-delete": self._delete,
+            "wp-clear": self._clear_all,
             "wp-up": lambda: self._move(-1),
             "wp-down": lambda: self._move(1),
             "wp-set-dwell": self._set_dwell,
@@ -138,6 +144,24 @@ class TeachTab(Container):
         self.refresh_table()
         if self.sequence.points:
             self.query_one(DataTable).move_cursor(row=min(row, len(self.sequence.points) - 1))
+
+    def _clear_all(self) -> None:
+        n = len(self.sequence.points)
+        if n == 0:
+            self.notify("No points to clear", severity="warning")
+            return
+        seq = self.sequence
+
+        def done(yes: bool | None) -> None:
+            if not yes or self.sequence is not seq:
+                return
+            self._stop_if_playing()
+            seq.points.clear()
+            seq.kind = "waypoints"
+            self.refresh_table()
+            self.notify("Cleared all points")
+
+        self.app.push_screen(ConfirmScreen(f"Delete all {n} points?"), done)
 
     def _move(self, delta: int) -> None:
         row = self._row()

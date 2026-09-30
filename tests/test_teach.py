@@ -8,6 +8,7 @@ from roarm.app import RoArmApp
 from roarm.device import SimDevice
 from roarm.sequence import Point, Sequence, save
 from roarm.ui.teach import TeachTab
+from roarm.ui.widgets import ConfirmScreen
 
 SIZE = (140, 45)
 
@@ -121,7 +122,7 @@ async def test_play_while_recording_is_refused(tmp_path):
         await pilot.click("#teach-play")
         assert app.player is None
         assert app.recorder is not None
-        assert str(tab.query_one("#teach-record", Button).label) == "⏹ Stop recording"
+        assert str(tab.query_one("#teach-record", Button).label) == "⏹ Stop recording path"
 
 
 async def test_save_and_load(tmp_path):
@@ -191,3 +192,82 @@ async def test_torque_button_label_follows_state(tmp_path):
         tab = await open_teach(pilot, app)
         tab.set_torque(False)
         assert "on" in str(tab.query_one("#teach-torque").label).lower()
+
+
+def _three_points(tab):
+    for i in range(3):
+        tab.capture(P.HOME.with_joint("base", 0.1 * i))
+
+
+async def test_clear_all_confirm_yes_empties_points(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_teach(pilot, app)
+        tab.sequence.name = "keepme"
+        _three_points(tab)
+        await pilot.click("#wp-clear")
+        await wait_for(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await pilot.click("#confirm-yes")
+        await wait_for(pilot, lambda: not isinstance(app.screen, ConfirmScreen))
+        assert tab.sequence.points == []
+        assert tab.query_one(DataTable).row_count == 0
+        assert tab.sequence.name == "keepme"
+        assert tab.sequence.kind == "waypoints"
+
+
+async def test_clear_all_cancel_keeps_points(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_teach(pilot, app)
+        _three_points(tab)
+        await pilot.click("#wp-clear")
+        await wait_for(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await pilot.click("#confirm-no")
+        await wait_for(pilot, lambda: not isinstance(app.screen, ConfirmScreen))
+        assert len(tab.sequence.points) == 3
+        assert tab.query_one(DataTable).row_count == 3
+
+
+async def test_clear_all_when_empty_does_not_open_confirm(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_teach(pilot, app)
+        await pilot.click("#wp-clear")
+        await pilot.pause(0.2)
+        assert not isinstance(app.screen, ConfirmScreen)
+        assert tab.sequence.points == []
+
+
+async def test_clear_all_stops_playback_of_this_sequence(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_teach(pilot, app)
+        tab.sequence = Sequence("x", "waypoints", [Point(P.HOME.with_joint("base", 1.0), 5.0),
+                                                   Point(P.HOME, 5.0)])
+        tab.refresh_table()
+        await pilot.click("#teach-play")
+        assert app.player is not None and app.player.running
+        await pilot.click("#wp-clear")
+        await wait_for(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await pilot.click("#confirm-yes")
+        await wait_for(pilot, lambda: not isinstance(app.screen, ConfirmScreen))
+        assert not app.player.running
+        assert tab.sequence.points == []
+
+
+HINT = "Press space or ● Capture point to add a waypoint"
+
+
+async def test_labels_and_empty_hint(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_teach(pilot, app)
+        assert str(tab.query_one("#wp-capture", Button).label) == "● Capture point"
+        assert str(tab.query_one("#teach-record", Button).label) == "⏺ Record path"
+        assert HINT in str(tab.query_one("#seq-info").render())
+        await pilot.click("#wp-capture")
+        await wait_for(pilot, lambda: len(tab.sequence.points) == 1)
+        assert HINT not in str(tab.query_one("#seq-info").render())
+        await pilot.click("#teach-record")
+        await wait_for(pilot, lambda: app.recorder is not None)
+        assert str(tab.query_one("#teach-record", Button).label) == "⏹ Stop recording path"
