@@ -217,3 +217,139 @@ class ArmDevice:
         if state is not None:
             self.state = state
             self.on_state(state)
+
+
+class SimDevice:
+    """Hardware-free stand-in with ArmDevice's interface. Joints slew toward their goal."""
+
+    port = "sim"
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic, rate: float = 20.0,
+                 slew: float = 2.5, boot_time: float = 0.3):
+        self.clock = clock
+        self.rate = rate
+        self.slew = slew
+        self.boot_time = boot_time
+
+        self.on_state: Callable[[P.ArmState], None] = _noop
+        self.on_line: Callable[[str, str], None] = _noop
+        self.on_status: Callable[[str], None] = _noop
+
+        self.state: P.ArmState | None = None
+        self.connected = False
+        self.booting = False
+        self.torque = True
+
+        self._pose = P.HOME
+        self._goal = P.HOME
+        self._queue: deque[dict] = deque()
+        self._target: dict | None = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._stop.clear()
+        self.connected = True
+        self.booting = True
+        self.on_line("sys", "simulator started")
+        self.on_status("booting")
+        self._thread = threading.Thread(target=self._run, name="roarm-sim", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        self.connected = False
+
+    def send(self, cmd: dict) -> None:
+        with self._lock:
+            self._queue.append(cmd)
+
+    def send_now(self, cmd: dict) -> None:
+        with self._lock:
+            self._queue.appendleft(cmd)
+
+    def set_target(self, pose: P.Pose, spd: int = 0, acc: int = 10) -> None:
+        with self._lock:
+            self._target = P.cmd_joints(pose, spd=spd, acc=acc)
+
+    def clear_queue(self) -> None:
+        with self._lock:
+            self._queue.clear()
+            self._target = None
+
+    def _run(self) -> None:
+        self._stop.wait(self.boot_time)
+        self.booting = False
+        self.on_status("ready")
+        last = self.clock()
+        while not self._stop.is_set():
+            now = self.clock()
+            self.step(now - last)
+            last = now
+            self._stop.wait(1.0 / self.rate)
+
+    def step(self, dt: float) -> None:
+        with self._lock:
+            cmds = list(self._queue)
+            self._queue.clear()
+            if self._target is not None:
+                # target (a full-pose jog) applies first so queued single-joint
+                # commands sent afterward can still layer on top of it
+                cmds.insert(0, self._target)
+                self._target = None
+        for cmd in cmds:
+            self.on_line("tx", json.dumps(cmd, separators=(",", ":")))
+            self._apply(cmd)
+        if self.torque:
+            max_step = self.slew * dt
+            moved = {}
+            for j in P.JOINTS:
+                cur, goal = self._pose.get(j), self._goal.get(j)
+                # land exactly on the goal so poses compare equal once reached
+                moved[j] = goal if abs(goal - cur) <= max_step else cur + math.copysign(max_step, goal - cur)
+            self._pose = P.Pose(**moved)
+        else:
+            self._goal = self._pose
+        self.state = self._make_state()
+        self.on_state(self.state)
+
+    def _apply(self, cmd: dict) -> None:
+        t = cmd.get("T")
+        try:
+            if t == 100:
+                self._goal = P.HOME
+            elif t == 102:
+                self._goal = P.Pose(float(cmd["base"]), float(cmd["shoulder"]),
+                                    float(cmd["elbow"]), float(cmd["hand"])).clamped()
+            elif t == 101:
+                joint = P.JOINTS[int(cmd["joint"]) - 1]
+                self._goal = self._goal.with_joint(joint, float(cmd["rad"]))
+            elif t == 106:
+                self._goal = self._goal.with_joint("hand", float(cmd["cmd"]))
+            elif t == 210:
+                self.torque = bool(cmd["cmd"])
+                self._goal = self._pose
+            elif t == 105:
+                pass
+            elif t == 302:
+                self.on_line("rx", "F0:00:00:00:00:00")
+            elif t == 405:
+                self.on_line("rx", '{"ip":"sim","rssi":0}')
+            else:
+                self.on_line("rx", json.dumps(cmd))
+        except (KeyError, TypeError, ValueError, IndexError):
+            self.on_line("sys", f"sim: bad command {cmd}")
+
+    def _make_state(self) -> P.ArmState:
+        x, y, z = P.forward_kinematics(self._pose)
+        loads = {
+            "base": 0,
+            "shoulder": int(60 + 180 * abs(math.sin(self._pose.shoulder))),
+            "elbow": int(60 + 120 * abs(math.cos(self._pose.shoulder + self._pose.elbow))),
+            "hand": 0,
+        } if self.torque else {j: 0 for j in P.JOINTS}
+        return P.ArmState(self._pose, x, y, z, loads, self.clock(),
+                          torque={j: self.torque for j in P.JOINTS})
