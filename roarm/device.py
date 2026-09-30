@@ -323,7 +323,10 @@ class SimDevice:
                 self._goal = P.Pose(float(cmd["base"]), float(cmd["shoulder"]),
                                     float(cmd["elbow"]), float(cmd["hand"])).clamped()
             elif t == 101:
-                joint = P.JOINTS[int(cmd["joint"]) - 1]
+                idx = int(cmd["joint"])
+                if not 1 <= idx <= len(P.JOINTS):
+                    raise IndexError(f"joint id {idx} out of range")
+                joint = P.JOINTS[idx - 1]
                 self._goal = self._goal.with_joint(joint, float(cmd["rad"]))
             elif t == 106:
                 self._goal = self._goal.with_joint("hand", float(cmd["cmd"]))

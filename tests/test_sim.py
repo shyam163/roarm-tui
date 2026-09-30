@@ -85,6 +85,16 @@ def test_info_commands_and_bad_command():
     assert any(d == "tx" for d, _ in sim.lines)
 
 
+def test_joint_id_out_of_range_reported_as_bad_command():
+    sim = make()
+    sim.send({"T": 101, "joint": 0, "rad": 2.0})
+    sim.send({"T": 101, "joint": 5, "rad": 2.0})
+    sim.step(0.1)
+    bad = [t for d, t in sim.lines if d == "sys" and "bad command" in t]
+    assert len(bad) == 2
+    assert sim.state.pose == P.HOME
+
+
 def test_clear_queue():
     sim = make()
     sim.send(P.cmd_joints(P.HOME.with_joint("base", 1.0)))
