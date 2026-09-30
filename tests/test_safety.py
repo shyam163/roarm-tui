@@ -43,8 +43,9 @@ async def test_console_motion_then_jog_starts_from_actual_pose(tmp_path):
         await wait_for(pilot, lambda: app.target.base > 0.99)   # target followed the arm all the way
         app.query_one("#slider-base").focus()
         await pilot.press("1")
+        before = app.state.pose.base          # settled at ~1.0, captured before the jog moves it
         await pilot.press("d")
-        assert app.target.base == pytest.approx(app.state.pose.base + math.radians(app.step_deg), abs=0.02)
+        assert app.target.base == pytest.approx(before + math.radians(app.step_deg), abs=0.02)
         assert app.follow_feedback is False
 
 
