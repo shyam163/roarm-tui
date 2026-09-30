@@ -36,12 +36,12 @@ class ControlTab(Container):
                 yield LoadBars(id="loads")
             yield ArmView(id="arm-view", classes="panel")
         with Horizontal(id="control-buttons"):
+            yield Button("■ E-STOP", id="btn-estop", variant="error")
             yield Button("⌂ Home", id="btn-home")
             yield Button("⚡ Torque", id="btn-torque")
             yield Button("◁▷ Open", id="btn-open")
             yield Button("▷◁ Close", id="btn-close")
             yield Button("💡 LED", id="btn-led")
-            yield Button("■ E-STOP", id="btn-estop", variant="error")
 
     def on_mount(self) -> None:
         self.query_one("#joints-panel").border_title = "JOINTS"
