@@ -98,6 +98,20 @@ async def test_torque_off_requires_confirmation(tmp_path):
         assert app.torque_on
 
 
+async def test_playback_from_torque_off_reenables_torque(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.state is not None)
+        await pilot.press("t")
+        await pilot.click("#confirm-yes")
+        await pilot.pause()
+        await wait_for(pilot, lambda: app.device.torque is False)
+        seq = Sequence("s", "waypoints", [Point(P.HOME.with_joint("base", 1.0), 0.2)])
+        assert app.start_playback(seq)
+        await wait_for(pilot, lambda: app.device.torque is True)
+        await wait_for(pilot, lambda: app.state.pose.base > 0.3)
+
+
 async def test_disconnect_stops_playback(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=SIZE) as pilot:

@@ -290,9 +290,9 @@ class RoArmApp(App):
             return False
         if self.recorder is not None:
             self.stop_recording()
+        self.device.clear_queue()
         if not self.torque_on:
             self._set_torque(True)
-        self.device.clear_queue()
         self.player = Player(seq, speed=speed, loop=loop)
         self.player.start(time.monotonic())
         self.query_one(TeachTab).refresh_status()
