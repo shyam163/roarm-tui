@@ -96,14 +96,15 @@ def test_partial_lines_are_buffered():
 def test_priority_queue_then_target_then_poll():
     dev, fake, clock = make()
     ready(dev, fake, clock)
+    dev._last_poll = clock()
     dev.set_target(Pose(base=0.5))
     dev.send({"T": 100})
     for _ in range(3):
-        clock.advance(0.06); dev.step()
+        clock.advance(0.03); dev.step()
     sent = fake.sent()
     assert sent[0] == {"T": 100}
-    assert sent[1]["T"] == 102 and sent[1]["base"] == 0.5
-    assert sent[2] == {"T": 105}
+    assert sent[1] == {"T": 105}                 # the poll came due: it goes before the target
+    assert sent[2]["T"] == 102 and sent[2]["base"] == 0.5
 
 
 def test_send_now_jumps_queue():
@@ -117,9 +118,10 @@ def test_send_now_jumps_queue():
 def test_set_target_coalesces():
     dev, fake, clock = make()
     ready(dev, fake, clock)
+    dev._last_poll = clock()
     dev.set_target(Pose(base=0.1), spd=300)
     dev.set_target(Pose(base=0.2), spd=300)
-    clock.advance(0.06); dev.step()
+    clock.advance(0.03); dev.step()
     clock.advance(0.06); dev.step()
     sent = fake.sent()
     assert sent[0]["base"] == 0.2 and sent[0]["spd"] == 300
@@ -234,3 +236,35 @@ def test_start_stop_thread():
     dev.stop()
     assert not dev._thread.is_alive()
     assert fake.closed
+
+
+def test_feedback_polls_not_starved_by_queued_commands():
+    dev, fake, clock = make()
+    ready(dev, fake, clock)
+    poll_times = []
+    for _ in range(200):
+        dev.send({"T": 102, "base": 0.1, "shoulder": 0, "elbow": 1.57, "hand": 3.14})
+        clock.advance(0.05)
+        before = len(fake.tx)
+        dev.step()
+        if len(fake.tx) > before and fake.sent()[-1]["T"] == 105:
+            poll_times.append(clock())
+    assert len(poll_times) * 3 >= len(fake.tx)
+    gaps = [b - a for a, b in zip(poll_times, poll_times[1:])]
+    assert max(gaps) <= 2 * dev.poll_interval + 0.06
+
+
+def test_send_now_beats_an_overdue_poll():
+    dev, fake, clock = make()
+    ready(dev, fake, clock)
+    clock.advance(1.0)
+    dev.send({"T": 102, "base": 0.1})
+    dev.send_now({"T": 210, "cmd": 1})
+    dev.step()
+    assert fake.sent()[-1] == {"T": 210, "cmd": 1}
+    clock.advance(0.05)
+    dev.step()
+    assert fake.sent()[-1] == {"T": 105}
+    clock.advance(0.05)
+    dev.step()
+    assert fake.sent()[-1]["T"] == 102

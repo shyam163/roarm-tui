@@ -62,6 +62,7 @@ class WifiDevice:
         self._queue: deque[dict] = deque()
         self._target: dict | None = None
         self._retry_of: dict | None = None  # queue item currently allowed one retry
+        self._urgent = 0  # send_now() items at the head of the queue; they outrank an overdue poll
         self._gen = 0  # bumped by clear_queue(); guards stale retries from a cleared queue
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -93,6 +94,7 @@ class WifiDevice:
     def send_now(self, cmd: dict) -> None:
         with self._lock:
             self._queue.appendleft(cmd)
+            self._urgent += 1
 
     def set_target(self, pose: P.Pose, spd: int = 0, acc: int = 10) -> None:
         with self._lock:
@@ -101,6 +103,7 @@ class WifiDevice:
     def clear_queue(self) -> None:
         with self._lock:
             self._queue.clear()
+            self._urgent = 0
             self._target = None
             self._retry_of = None
             self._gen += 1
@@ -146,15 +149,21 @@ class WifiDevice:
     def _next_cmd(self, now: float) -> tuple[dict, str, int] | tuple[None, None, None]:
         with self._lock:
             gen = self._gen
+            if self._urgent > 0 and self._queue:
+                self._urgent -= 1
+                return self._queue.popleft(), "queue", gen
+            self._urgent = 0
+            # An overdue poll goes before queued commands / jog targets, so a steady
+            # command stream can never starve feedback (E-stop relies on a fresh pose).
+            if now - self._last_poll >= self.poll_interval:
+                self._last_poll = now
+                return P.cmd_feedback(), "poll", gen
             if self._queue:
                 return self._queue.popleft(), "queue", gen
             if self._target is not None and now - self._last_target_tx >= self.jog_interval:
                 cmd, self._target = self._target, None
                 self._last_target_tx = now
                 return cmd, "target", gen
-        if now - self._last_poll >= self.poll_interval:
-            self._last_poll = now
-            return P.cmd_feedback(), "poll", gen
         return None, None, None
 
     def _handle_failed_send(self, cmd: dict, source: str, gen: int, err: Exception) -> None:

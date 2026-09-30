@@ -26,6 +26,7 @@ from roarm.ui.widgets import ConfirmScreen, StatusBar
 from roarm.wifi import WifiDevice
 
 STALE_AFTER = 1.0
+HOLD_MAX_AGE = 0.25       # E-stop only holds a pose at least this fresh
 NOT_READY_MSG = "Arm not ready — waiting for connection/feedback"
 WIFI_PROBES = 20          # T:405 polls after sending new Wi-Fi settings
 WIFI_PROBE_EVERY = 1.5    # seconds between polls
@@ -398,14 +399,20 @@ class RoArmApp(App):
             self.player.stop()
         self.follow_feedback = False
         self.device.clear_queue()
-        holdable = self.device.connected and not self.device.booting and self.fresh
-        if holdable and self.torque_on:
-            self.target = self.state.pose
+        live = self.device.connected and not self.device.booting
+        if live and self.torque_on:
             # send_now prepends: queue ends up [torque on, hold] — re-assert torque in case
             # an E-stop right after torque-on just cleared the queued T:210
-            self.device.send_now(P.cmd_joints(self.state.pose, spd=0, acc=0))
-            self.device.send_now(P.cmd_torque(True))
-            self.query_one(ControlTab).sync_targets(self.target)
+            if self.state is not None and time.monotonic() - self._last_state_time < HOLD_MAX_AGE:
+                self.target = self.state.pose
+                self.device.send_now(P.cmd_joints(self.state.pose, spd=0, acc=0))
+                self.device.send_now(P.cmd_torque(True))
+                self.query_one(ControlTab).sync_targets(self.target)
+            else:
+                # the pose may be seconds old — holding it would slam the arm there at
+                # full speed; keep torque and let the next frame become the target
+                self.device.send_now(P.cmd_torque(True))
+                self.needs_sync = True
         self.notify("E-STOP — holding position", severity="error")
         self.query_one(TeachTab).refresh_status()
 

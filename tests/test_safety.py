@@ -118,3 +118,29 @@ async def test_console_rejects_overflowing_float(tmp_path):
         app.device.send = sent.append
         await console_send(pilot, app, '{"T":102,"base":1e999}')
         assert sent == []
+
+
+async def test_estop_with_stale_pose_sends_torque_only_and_resyncs(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        sent = []
+        app.device.send_now = sent.append
+        app.device.set_target = lambda *a, **k: None
+        app._last_state_time = time.monotonic() - 0.5      # pose is 0.5 s old
+        app.state = app.state                               # still 'fresh' by STALE_AFTER
+        app.action_estop()
+        assert sent == [P.cmd_torque(True)]
+        assert app.needs_sync is True
+
+
+async def test_estop_with_fresh_pose_sends_torque_then_hold(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        sent = []
+        app.device.send_now = sent.append
+        app._last_state_time = time.monotonic()
+        app.action_estop()
+        assert [c["T"] for c in sent] == [102, 210]         # call order; send_now prepends so torque runs first
+        assert sent[0]["spd"] == 0 and sent[0]["acc"] == 0

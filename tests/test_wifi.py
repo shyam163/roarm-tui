@@ -28,6 +28,16 @@ def online(dev, fake):
     fake.requests.clear()
 
 
+def mute_polls(dev, clock):
+    """Suppress feedback polls (an overdue poll outranks queued commands) to isolate other behaviour."""
+    dev._last_poll = clock()
+    dev.poll_interval = 1e9
+
+
+def unmute_polls(dev, interval=0.05):
+    dev.poll_interval = interval
+
+
 def test_first_contact_goes_online_with_state():
     dev, fake, clock = make()
     dev.run_once()
@@ -41,6 +51,7 @@ def test_first_contact_goes_online_with_state():
 def test_url_is_percent_encoded():
     dev, fake, clock = make()
     online(dev, fake)
+    mute_polls(dev, clock)
     dev.send({"T": 102, "base": 0.5})
     dev.run_once()
     url = fake.requests[-1]
@@ -51,15 +62,16 @@ def test_url_is_percent_encoded():
 def test_priority_queue_then_target_then_poll():
     dev, fake, clock = make()
     online(dev, fake)
+    dev._last_poll = clock()
     dev.set_target(Pose(base=0.5))
     dev.send({"T": 100})
     for _ in range(3):
-        clock.advance(0.06)
+        clock.advance(0.03)
         dev.run_once()
     sent = fake.sent()
     assert sent[0] == {"T": 100}
-    assert sent[1]["T"] == 102 and sent[1]["base"] == 0.5
-    assert sent[2] == {"T": 105}
+    assert sent[1] == {"T": 105}                 # the poll came due: it goes before the target
+    assert sent[2]["T"] == 102 and sent[2]["base"] == 0.5
 
 
 def test_jog_target_limited_to_20hz():
@@ -69,7 +81,7 @@ def test_jog_target_limited_to_20hz():
         dev.set_target(Pose(base=0.1 * i))
         clock.advance(0.03)
         dev.run_once()
-    assert [c["T"] for c in fake.sent()] == [102, 105, 102, 105, 102, 105]
+    assert [c["T"] for c in fake.sent()] == [105, 102, 105, 102, 105, 102]
 
 
 def test_idle_when_nothing_due():
@@ -161,6 +173,7 @@ def test_rx_lines_logged():
 def test_queued_command_retried_once_after_transient_failure():
     dev, fake, clock = make()
     online(dev, fake)
+    mute_polls(dev, clock)
     dev.send({"T": 100})
     fake.fail_next = 1
     clock.advance(0.06)
@@ -177,6 +190,7 @@ def test_queued_command_retried_once_after_transient_failure():
 def test_queued_command_not_retried_twice():
     dev, fake, clock = make()
     online(dev, fake)
+    mute_polls(dev, clock)
     dev.send({"T": 1})
     fake.fail_next = 2
     clock.advance(0.06)
@@ -186,6 +200,7 @@ def test_queued_command_not_retried_twice():
     dev.run_once()                     # second failure (the retry itself) -> dropped
     assert dev.connected
     assert list(dev._queue) == [] and dev._target is None
+    unmute_polls(dev)
     clock.advance(0.06)
     dev.run_once()
     assert fake.sent()[-1] == {"T": 105}   # next request is a poll, not another retry
@@ -212,12 +227,14 @@ def test_commands_sent_while_offline_are_discarded():
 def test_jog_target_failure_is_not_retried_but_logged():
     dev, fake, clock = make()
     online(dev, fake)
+    mute_polls(dev, clock)
     dev.set_target(Pose(base=0.5))
     fake.fail_next = 1
     clock.advance(0.06)
     dev.run_once()
     assert dev.connected and dev._target is None
     assert any(d == "sys" and "jog target failed" in t for d, t in dev.lines)
+    unmute_polls(dev)
     clock.advance(0.06)
     dev.run_once()
     assert fake.sent()[-1] == {"T": 105}   # not retried — poll goes out next
@@ -252,3 +269,34 @@ def test_start_stop_thread():
     dev.stop()
     assert not dev._thread.is_alive()
     assert not dev.connected
+
+
+def test_feedback_polls_not_starved_by_20hz_stream():
+    dev, fake, clock = make()
+    online(dev, fake)
+    fake.on_request = lambda: clock.advance(0.05)      # ~50 ms HTTP round trip
+    poll_times = []
+    for _ in range(200):
+        dev.send({"T": 102, "base": 0.1, "shoulder": 0, "elbow": 1.57, "hand": 3.14})
+        before = len(fake.requests)
+        dev.run_once()
+        if len(fake.requests) > before and fake.sent()[-1]["T"] == 105:
+            poll_times.append(clock())
+    total = len(fake.requests)
+    assert len(poll_times) * 3 >= total                  # >= 1 poll per 3 requests
+    gaps = [b - a for a, b in zip(poll_times, poll_times[1:])]
+    assert max(gaps) <= 2 * dev.poll_interval + 0.06     # 2 x interval plus one round trip
+
+
+def test_send_now_beats_an_overdue_poll():
+    dev, fake, clock = make()
+    online(dev, fake)
+    clock.advance(1.0)                                   # poll long overdue
+    dev.send({"T": 102, "base": 0.1})
+    dev.send_now({"T": 210, "cmd": 1})
+    dev.run_once()
+    assert fake.sent()[-1] == {"T": 210, "cmd": 1}
+    dev.run_once()
+    assert fake.sent()[-1] == {"T": 105}                 # then the overdue poll
+    dev.run_once()
+    assert fake.sent()[-1]["T"] == 102

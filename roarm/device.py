@@ -67,6 +67,7 @@ class ArmDevice:
         self._rxbuf = b""
         self._queue: deque[dict] = deque()
         self._target: dict | None = None
+        self._urgent = 0  # send_now() items at the head of the queue; they outrank an overdue poll
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -96,6 +97,7 @@ class ArmDevice:
     def send_now(self, cmd: dict) -> None:
         with self._lock:
             self._queue.appendleft(cmd)
+            self._urgent += 1
 
     def set_target(self, pose: P.Pose, spd: int = 0, acc: int = 10) -> None:
         with self._lock:
@@ -104,6 +106,7 @@ class ArmDevice:
     def clear_queue(self) -> None:
         with self._lock:
             self._queue.clear()
+            self._urgent = 0
             self._target = None
 
     # --- loop ---------------------------------------------------------------
@@ -177,15 +180,21 @@ class ArmDevice:
 
     def _next_cmd(self, now: float) -> dict | None:
         with self._lock:
+            if self._urgent > 0 and self._queue:
+                self._urgent -= 1
+                return self._queue.popleft()
+            self._urgent = 0
+            # An overdue poll goes before queued commands / jog targets, so a steady
+            # command stream can never starve feedback (E-stop relies on a fresh pose).
+            if now - self._last_poll >= self.poll_interval:
+                self._last_poll = now
+                return P.cmd_feedback()
             if self._queue:
                 return self._queue.popleft()
             if self._target is not None and now - self._last_target_tx >= self.jog_interval:
                 cmd, self._target = self._target, None
                 self._last_target_tx = now
                 return cmd
-        if now - self._last_poll >= self.poll_interval:
-            self._last_poll = now
-            return P.cmd_feedback()
         return None
 
     def _write(self, cmd: dict, now: float) -> None:
