@@ -223,6 +223,25 @@ def test_jog_target_failure_is_not_retried_but_logged():
     assert fake.sent()[-1] == {"T": 105}   # not retried — poll goes out next
 
 
+def test_retry_dropped_if_queue_cleared_during_request():
+    dev, fake, clock = make()
+    online(dev, fake)
+    dev.send({"T": 100})
+
+    def estop_mid_flight():
+        # simulate app.py's action_estop firing while T:100's request is in flight
+        dev.clear_queue()
+        dev.send_now({"T": 999})
+
+    fake.on_request = estop_mid_flight
+    fake.fail_next = 1
+    clock.advance(0.06)
+    dev.run_once()
+    fake.on_request = None
+    assert dev.connected                       # one failure tolerated
+    assert list(dev._queue) == [{"T": 999}]     # T:100 not re-inserted ahead of the E-stop
+
+
 def test_start_stop_thread():
     fake = FakeHTTP()
     dev = WifiDevice("10.0.0.2", http_factory=lambda h, t: fake, reconnect_delay=0)

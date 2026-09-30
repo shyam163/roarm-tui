@@ -75,8 +75,11 @@ class FakeHTTP:
         self.status = 200
         self.closed = 0
         self.replies = {105: FEEDBACK_JSON}
+        self.on_request = None  # optional callback(), run before each request is handled
 
     def request(self, method, url):
+        if self.on_request is not None:
+            self.on_request()
         if self.fail_next > 0:
             self.fail_next -= 1
             raise ConnectionRefusedError("connection refused")

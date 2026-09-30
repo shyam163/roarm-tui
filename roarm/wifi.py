@@ -6,7 +6,10 @@ Wi-Fi does not reset the arm, so there is no boot phase.
 Commands from the explicit send()/send_now() queue are absolute/idempotent
 (poses, home, torque), so a single transient failure gets one retry before the
 command is dropped. Jog targets and feedback polls are superseded by the next
-one anyway, so they are never retried — only logged on failure.
+one anyway, so they are never retried — only logged on failure. A retry is only
+re-queued if clear_queue() (e.g. an E-stop) hasn't run since the command was
+popped — tracked via a generation counter bumped inside clear_queue() — so a
+stale command can never jump ahead of fresher commands sent after a clear.
 """
 
 from __future__ import annotations
@@ -59,6 +62,7 @@ class WifiDevice:
         self._queue: deque[dict] = deque()
         self._target: dict | None = None
         self._retry_of: dict | None = None  # queue item currently allowed one retry
+        self._gen = 0  # bumped by clear_queue(); guards stale retries from a cleared queue
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -99,6 +103,7 @@ class WifiDevice:
             self._queue.clear()
             self._target = None
             self._retry_of = None
+            self._gen += 1
 
     def set_host(self, host: str) -> None:
         """Point at a new IP; the worker drops its connection before the next request."""
@@ -124,43 +129,54 @@ class WifiDevice:
             else:
                 self._stop.wait(self.reconnect_delay)
             return
-        cmd, source = self._next_cmd(self.clock())
+        cmd, source, gen = self._next_cmd(self.clock())
         if cmd is None:
             self._stop.wait(self.idle_wait)
             return
         ok, err = self._request(cmd)
         if ok:
             if source == "queue":
-                self._retry_of = None
+                with self._lock:
+                    if cmd is self._retry_of:
+                        self._retry_of = None
         elif self.connected:
-            self._handle_failed_send(cmd, source, err)
+            self._handle_failed_send(cmd, source, gen, err)
 
     # --- internals ----------------------------------------------------------
-    def _next_cmd(self, now: float) -> tuple[dict, str] | tuple[None, None]:
+    def _next_cmd(self, now: float) -> tuple[dict, str, int] | tuple[None, None, None]:
         with self._lock:
+            gen = self._gen
             if self._queue:
-                return self._queue.popleft(), "queue"
+                return self._queue.popleft(), "queue", gen
             if self._target is not None and now - self._last_target_tx >= self.jog_interval:
                 cmd, self._target = self._target, None
                 self._last_target_tx = now
-                return cmd, "target"
+                return cmd, "target", gen
         if now - self._last_poll >= self.poll_interval:
             self._last_poll = now
-            return P.cmd_feedback(), "poll"
-        return None, None
+            return P.cmd_feedback(), "poll", gen
+        return None, None, None
 
-    def _handle_failed_send(self, cmd: dict, source: str, err: Exception) -> None:
+    def _handle_failed_send(self, cmd: dict, source: str, gen: int, err: Exception) -> None:
         """Called on the worker thread after a failed request that did not disconnect us."""
         if source == "queue":
-            if cmd is self._retry_of:
-                # already retried once and failed again — drop it
-                self._retry_of = None
-                return
+            requeued = False
             with self._lock:
-                self._queue.appendleft(cmd)
-            self._retry_of = cmd
-            text = json.dumps(cmd, separators=(",", ":"))
-            self.on_line("sys", f"request failed ({err}) — retrying {text}")
+                if gen == self._gen:
+                    # queue hasn't been cleared (e.g. by an E-stop) since we popped cmd
+                    if cmd is self._retry_of:
+                        # already retried once and failed again — drop it
+                        self._retry_of = None
+                    else:
+                        self._queue.appendleft(cmd)
+                        self._retry_of = cmd
+                        requeued = True
+                # else: clear_queue() ran while this request was in flight — cmd and
+                # any retry state are stale, so drop it silently rather than let it
+                # jump ahead of whatever was sent after the clear.
+            if requeued:
+                text = json.dumps(cmd, separators=(",", ":"))
+                self.on_line("sys", f"request failed ({err}) — retrying {text}")
         elif source == "target":
             text = json.dumps(cmd, separators=(",", ":"))
             self.on_line("sys", f"jog target failed ({err}): {text}")
