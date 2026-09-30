@@ -272,6 +272,10 @@ class RoArmApp(App):
 
     def _set_torque(self, on: bool) -> None:
         self.device.send(P.cmd_torque(on))
+        if on and self.state is not None:
+            # hold where the hand left it — otherwise the servos can snap to a stale target
+            self.device.send(P.cmd_joints(self.state.pose, spd=0, acc=10))
+            self.target = self.state.pose
         self.torque_on = on
         self.needs_sync = True
         self.query_one(TeachTab).set_torque(on)

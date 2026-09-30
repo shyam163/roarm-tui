@@ -176,6 +176,29 @@ async def test_cannot_open_status_notifies_without_markup(tmp_path):
         assert calls and calls[0][1].get("markup") is False
 
 
+async def test_torque_on_holds_current_pose(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.state is not None)
+        await pilot.press("t")
+        await pilot.click("#confirm-yes")
+        await pilot.pause()
+        await wait_for(pilot, lambda: app.device.torque is False)
+        calls = []
+        orig_send = app.device.send
+
+        def spy(cmd):
+            calls.append(cmd)
+            return orig_send(cmd)
+
+        app.device.send = spy
+        pose = app.state.pose
+        await pilot.press("t")               # torque back on, no confirmation needed
+        assert calls[0] == P.cmd_torque(True)
+        assert P.cmd_joints(pose, spd=0, acc=10) in calls[1:]
+        assert app.target == pose
+
+
 async def test_home_button(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=SIZE) as pilot:
