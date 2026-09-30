@@ -145,6 +145,40 @@ async def test_load_corrupt_file_keeps_current(tmp_path):
         assert len(tab.sequence.points) == 1
 
 
+async def test_save_load_name_with_markup_chars_does_not_raise(tmp_path):
+    # "x [/oops" is valid text but invalid Textual content-markup (an unmatched
+    # closing tag) — Content.from_markup("x [/oops") raises MarkupError. Any
+    # notify() that renders a name/filename/exception as markup (the default)
+    # is one untrusted sequence name away from crashing the render pass.
+    from textual.content import Content
+    from textual.markup import MarkupError
+    with pytest.raises(MarkupError):
+        Content.from_markup("x [/oops")
+
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_teach(pilot, app)
+        tab.capture(P.HOME)
+        tab.query_one("#seq-name", Input).value = "x [/oops"
+        calls = []
+        orig_notify = app.notify
+
+        def spy(message, **kw):
+            calls.append((message, kw))
+            return orig_notify(message, **kw)
+
+        app.notify = spy
+        await pilot.click("#seq-save")                 # notifies "Saved <file>"
+        await pilot.click("#seq-new")
+        tab.refresh_files()
+        await pilot.pause()
+        tab.query_one("#seq-select", Select).value = str(next(tmp_path.glob("*.json")))
+        await pilot.click("#seq-load")                 # notifies "Loaded x [/oops (...)"
+        assert tab.sequence.name == "x [/oops"
+        loaded = [kw for msg, kw in calls if "x [/oops" in msg]
+        assert loaded and all(kw.get("markup") is False for kw in loaded)
+
+
 async def test_torque_button_label_follows_state(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=SIZE) as pilot:

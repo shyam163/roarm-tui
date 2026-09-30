@@ -150,7 +150,7 @@ class RoArmApp(App):
                 pass  # widgets not mounted yet / shutting down
             self.notify("Arm ready")
         elif text.startswith("cannot open"):
-            self.notify(text, severity="error", timeout=6)
+            self.notify(text, severity="error", timeout=6, markup=False)
         self._refresh_status()
 
     # --- periodic -----------------------------------------------------------

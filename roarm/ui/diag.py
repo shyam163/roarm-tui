@@ -127,7 +127,7 @@ class DiagTab(Container):
             if not isinstance(cmd, dict):
                 raise ValueError("command must be a JSON object")
         except ValueError as e:
-            self.notify(f"Invalid JSON: {e}", severity="error")
+            self.notify(f"Invalid JSON: {e}", severity="error", markup=False)
             return
         self.app.device.send(cmd)
         self.app.needs_sync = True  # console is RAW — resync the jog target to the next feedback

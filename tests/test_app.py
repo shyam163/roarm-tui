@@ -160,6 +160,22 @@ async def test_estop_sends_no_motion_when_not_ready(tmp_path):
         assert calls == [("clear_queue",)]
 
 
+async def test_cannot_open_status_notifies_without_markup(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.state is not None)
+        calls = []
+        orig_notify = app.notify
+
+        def spy(message, **kw):
+            calls.append((message, kw))
+            return orig_notify(message, **kw)
+
+        app.notify = spy
+        app._handle_status("cannot open /dev/ttyUSB0: [Errno 2] No such file or directory: '[/oops'")
+        assert calls and calls[0][1].get("markup") is False
+
+
 async def test_home_button(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=SIZE) as pilot:

@@ -94,6 +94,25 @@ async def test_console_sends_valid_json_only(tmp_path):
         assert console.value == ""
 
 
+async def test_invalid_json_notifies_without_markup(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_diag(pilot, app)
+        calls = []
+        orig_notify = app.notify
+
+        def spy(message, **kw):
+            calls.append((message, kw))
+            return orig_notify(message, **kw)
+
+        app.notify = spy
+        console = tab.query_one("#console", Input)
+        console.focus()
+        console.value = "{not json [/oops"
+        await pilot.press("enter")
+        assert calls and calls[0][1].get("markup") is False
+
+
 async def test_device_info_captured(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=SIZE) as pilot:

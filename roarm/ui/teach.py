@@ -191,9 +191,9 @@ class TeachTab(Container):
         try:
             path = save(self.sequence, self.sequence_dir)
         except OSError as e:
-            self.notify(f"Could not save: {e}", severity="error")
+            self.notify(f"Could not save: {e}", severity="error", markup=False)
             return
-        self.notify(f"Saved {path.name}")
+        self.notify(f"Saved {path.name}", markup=False)
         self.refresh_files()
         self.refresh_status()
 
@@ -211,10 +211,10 @@ class TeachTab(Container):
         try:
             seq = load(Path(value))
         except ValueError as e:
-            self.notify(f"Could not load: {e}", severity="error")
+            self.notify(f"Could not load: {e}", severity="error", markup=False)
             return
         self._stop_if_playing()
         self.sequence = seq
         self.query_one("#seq-name", Input).value = seq.name
         self.refresh_table()
-        self.notify(f"Loaded {seq.name} ({len(seq.points)} points)")
+        self.notify(f"Loaded {seq.name} ({len(seq.points)} points)", markup=False)
