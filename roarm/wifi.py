@@ -133,6 +133,7 @@ class WifiDevice:
             ok, _ = self._request(P.cmd_feedback())
             if ok:
                 self.connected = True
+                self._last_poll = self.clock()   # the probe was a poll
                 self.clear_queue()  # nothing issued while offline may reach the arm
                 self.on_line("sys", f"reached the arm at {self.host}")
                 self.on_status("online")
@@ -145,7 +146,7 @@ class WifiDevice:
             return
         ok, err = self._request(cmd)
         if ok:
-            if source == "queue":
+            if source in ("queue", "urgent"):
                 with self._lock:
                     if cmd is self._retry_of:
                         self._retry_of = None
@@ -158,11 +159,12 @@ class WifiDevice:
             gen = self._gen
             if self._urgent > 0 and self._queue:
                 self._urgent -= 1
-                return self._queue.popleft(), "queue", gen
+                return self._queue.popleft(), "urgent", gen
             self._urgent = 0
-            # An overdue poll goes before queued commands / jog targets, so a steady
-            # command stream can never starve feedback (E-stop relies on a fresh pose).
-            if now - self._last_poll >= self.poll_interval:
+            # A badly overdue poll (2 intervals) goes before queued commands / jog targets,
+            # so a command stream can never starve feedback (E-stop relies on a fresh pose).
+            # A merely due poll waits its turn, so polls don't halve command throughput.
+            if now - self._last_poll >= 2 * self.poll_interval:
                 self._last_poll = now
                 return P.cmd_feedback(), "poll", gen
             if self._queue:
@@ -171,11 +173,14 @@ class WifiDevice:
                 cmd, self._target = self._target, None
                 self._last_target_tx = now
                 return cmd, "target", gen
+            if now - self._last_poll >= self.poll_interval:
+                self._last_poll = now
+                return P.cmd_feedback(), "poll", gen
         return None, None, None
 
     def _handle_failed_send(self, cmd: dict, source: str, gen: int, err: Exception) -> None:
         """Called on the worker thread after a failed request that did not disconnect us."""
-        if source == "queue":
+        if source in ("queue", "urgent"):
             requeued = False
             with self._lock:
                 if gen == self._gen:
@@ -185,6 +190,8 @@ class WifiDevice:
                         self._retry_of = None
                     else:
                         self._queue.appendleft(cmd)
+                        if source == "urgent":
+                            self._urgent += 1   # a retried E-stop command stays ahead of polls
                         self._retry_of = cmd
                         requeued = True
                 # else: clear_queue() ran while this request was in flight — cmd and

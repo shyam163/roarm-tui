@@ -59,7 +59,7 @@ def test_url_is_percent_encoded():
     assert "{" not in url and '"' not in url and " " not in url
 
 
-def test_priority_queue_then_target_then_poll():
+def test_priority_queue_then_target_then_due_poll():
     dev, fake, clock = make()
     online(dev, fake)
     dev._last_poll = clock()
@@ -70,8 +70,8 @@ def test_priority_queue_then_target_then_poll():
         dev.run_once()
     sent = fake.sent()
     assert sent[0] == {"T": 100}
-    assert sent[1] == {"T": 105}                 # the poll came due: it goes before the target
-    assert sent[2]["T"] == 102 and sent[2]["base"] == 0.5
+    assert sent[1]["T"] == 102 and sent[1]["base"] == 0.5    # a merely due poll waits behind queue and target
+    assert sent[2] == {"T": 105}
 
 
 def test_jog_target_limited_to_20hz():
@@ -81,7 +81,7 @@ def test_jog_target_limited_to_20hz():
         dev.set_target(Pose(base=0.1 * i))
         clock.advance(0.03)
         dev.run_once()
-    assert [c["T"] for c in fake.sent()] == [105, 102, 105, 102, 105, 102]
+    assert [c["T"] for c in fake.sent()] == [102, 105, 102, 105, 102, 105]
 
 
 def test_idle_when_nothing_due():
@@ -243,6 +243,7 @@ def test_jog_target_failure_is_not_retried_but_logged():
 def test_retry_dropped_if_queue_cleared_during_request():
     dev, fake, clock = make()
     online(dev, fake)
+    mute_polls(dev, clock)              # otherwise the request in flight is a poll, not T:100
     dev.send({"T": 100})
 
     def estop_mid_flight():
@@ -283,9 +284,9 @@ def test_feedback_polls_not_starved_by_20hz_stream():
         if len(fake.requests) > before and fake.sent()[-1]["T"] == 105:
             poll_times.append(clock())
     total = len(fake.requests)
-    assert len(poll_times) * 3 >= total                  # >= 1 poll per 3 requests
+    assert len(poll_times) * 4 >= total                  # >= 1 poll per 4 requests
     gaps = [b - a for a, b in zip(poll_times, poll_times[1:])]
-    assert max(gaps) <= 2 * dev.poll_interval + 0.06     # 2 x interval plus one round trip
+    assert max(gaps) <= 0.25
 
 
 def test_send_now_beats_an_overdue_poll():
@@ -308,3 +309,66 @@ def test_set_idle_slows_polling_and_restores():
     assert dev.poll_interval == 1.0
     dev.set_idle(False)
     assert dev.poll_interval == 0.05
+
+
+def test_trajectory_stream_over_slow_link_builds_no_backlog():
+    dev, fake, clock = make()
+    online(dev, fake)
+    fake.on_request = lambda: clock.advance(0.05)         # ~50 ms round trip
+    poll_times, target_times, max_queue = [], [], 0
+    t_next = clock()
+    end = clock() + 10.0
+    while clock() < end:
+        if clock() >= t_next:                              # the app's 20 Hz playback tick
+            dev.set_target(Pose(base=0.1), spd=100, acc=10)
+            t_next += 0.05
+        before = len(fake.requests)
+        dev.run_once()
+        max_queue = max(max_queue, len(dev._queue))
+        if len(fake.requests) > before:
+            (poll_times if fake.sent()[-1]["T"] == 105 else target_times).append(clock())
+        else:
+            clock.advance(0.005)                           # idle slot
+    assert max_queue <= 1
+    assert len(target_times) / 10.0 >= 8                   # targets delivered at >= 8 Hz
+    assert max(b - a for a, b in zip(poll_times, poll_times[1:])) <= 0.25
+    # playback over: at most the one pending target, then only polls
+    fake.requests.clear()
+    dev.clear_queue()
+    for _ in range(10):
+        dev.run_once()
+    assert {c["T"] for c in fake.sent()} <= {105}
+
+
+def test_torque_off_after_trajectory_goes_out_on_the_next_slot():
+    dev, fake, clock = make()
+    online(dev, fake)
+    fake.on_request = lambda: clock.advance(0.05)
+    for _ in range(400):                                   # until the last request was a poll:
+        dev.set_target(Pose(base=0.1))                     # feedback is then not overdue
+        n = len(fake.requests)
+        dev.run_once()
+        if len(fake.requests) == n:
+            clock.advance(0.005)
+        elif fake.sent()[-1]["T"] == 105 and clock() > 100.5:
+            break
+    assert fake.sent()[-1]["T"] == 105
+    dev.set_target(Pose(base=0.2))                         # a pending target
+    dev.send({"T": 210, "cmd": 0})
+    dev.run_once()
+    assert fake.sent()[-1] == {"T": 210, "cmd": 0}
+
+
+def test_retried_urgent_command_stays_urgent():
+    dev, fake, clock = make()
+    online(dev, fake)
+    mute_polls(dev, clock)
+    dev.send({"T": 1})
+    dev.send_now({"T": 210, "cmd": 1})
+    fake.fail_next = 1
+    dev.run_once()                                         # urgent fails -> retried
+    assert list(dev._queue)[0] == {"T": 210, "cmd": 1} and dev._urgent == 1
+    clock.advance(1.0)
+    dev.poll_interval = 0.05                               # poll now badly overdue
+    dev.run_once()
+    assert fake.sent()[-1] == {"T": 210, "cmd": 1}

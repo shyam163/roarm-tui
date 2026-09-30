@@ -184,9 +184,9 @@ class ArmDevice:
                 self._urgent -= 1
                 return self._queue.popleft()
             self._urgent = 0
-            # An overdue poll goes before queued commands / jog targets, so a steady
-            # command stream can never starve feedback (E-stop relies on a fresh pose).
-            if now - self._last_poll >= self.poll_interval:
+            # A badly overdue poll (2 intervals) goes before queued commands / jog targets,
+            # so a command stream can never starve feedback; a merely due poll waits its turn.
+            if now - self._last_poll >= 2 * self.poll_interval:
                 self._last_poll = now
                 return P.cmd_feedback()
             if self._queue:
@@ -195,6 +195,9 @@ class ArmDevice:
                 cmd, self._target = self._target, None
                 self._last_target_tx = now
                 return cmd
+            if now - self._last_poll >= self.poll_interval:
+                self._last_poll = now
+                return P.cmd_feedback()
         return None
 
     def _write(self, cmd: dict, now: float) -> None:

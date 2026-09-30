@@ -241,7 +241,10 @@ class RoArmApp(App):
             return
         pose = self.state.pose if self.state is not None else None
         for cmd in p.tick(time.monotonic(), pose):
-            self.device.send(cmd)
+            # Player output is always a T:102 pose: use the coalesced latest-wins target slot
+            # so a slow link (Wi-Fi) can never build a backlog that outlives the playback.
+            self.device.set_target(P.Pose(cmd["base"], cmd["shoulder"], cmd["elbow"], cmd["hand"]),
+                                   spd=cmd["spd"], acc=cmd["acc"])
         if not p.running:
             self.notify("Playback finished")
         try:

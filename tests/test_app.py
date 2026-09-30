@@ -234,3 +234,19 @@ def test_cli_parses(monkeypatch):
     ran.clear()
     cli.main(["--port", "/dev/nothing"])
     assert ran["device"].devices["usb"].port == "/dev/nothing"
+
+
+async def test_playback_output_uses_the_coalesced_target_slot(tmp_path):
+    from roarm.sequence import Point, Sequence
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        targets, sent = [], []
+        app.device.set_target = lambda pose, spd=0, acc=10: targets.append((pose, spd, acc))
+        app.device.send = sent.append
+        seq = Sequence("s", "waypoints", [Point(P.HOME.with_joint("base", 0.3), 0.0)])
+        assert app.start_playback(seq)
+        sent.clear()
+        await wait_for(pilot, lambda: len(targets) > 0)
+        assert not any(c.get("T") == 102 for c in sent)
+        assert targets[0][0].base == 0.3

@@ -93,7 +93,7 @@ def test_partial_lines_are_buffered():
     assert dev.state is not None and dev.state.z == 221.9
 
 
-def test_priority_queue_then_target_then_poll():
+def test_priority_queue_then_target_then_due_poll():
     dev, fake, clock = make()
     ready(dev, fake, clock)
     dev._last_poll = clock()
@@ -103,8 +103,8 @@ def test_priority_queue_then_target_then_poll():
         clock.advance(0.03); dev.step()
     sent = fake.sent()
     assert sent[0] == {"T": 100}
-    assert sent[1] == {"T": 105}                 # the poll came due: it goes before the target
-    assert sent[2]["T"] == 102 and sent[2]["base"] == 0.5
+    assert sent[1]["T"] == 102 and sent[1]["base"] == 0.5    # a merely due poll waits behind queue and target
+    assert sent[2] == {"T": 105}
 
 
 def test_send_now_jumps_queue():
@@ -249,9 +249,9 @@ def test_feedback_polls_not_starved_by_queued_commands():
         dev.step()
         if len(fake.tx) > before and fake.sent()[-1]["T"] == 105:
             poll_times.append(clock())
-    assert len(poll_times) * 3 >= len(fake.tx)
+    assert len(poll_times) * 4 >= len(fake.tx)
     gaps = [b - a for a, b in zip(poll_times, poll_times[1:])]
-    assert max(gaps) <= 2 * dev.poll_interval + 0.06
+    assert max(gaps) <= 0.25
 
 
 def test_send_now_beats_an_overdue_poll():
