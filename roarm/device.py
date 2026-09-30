@@ -296,9 +296,7 @@ class SimDevice:
             cmds = list(self._queue)
             self._queue.clear()
             if self._target is not None:
-                # target (a full-pose jog) applies first so queued single-joint
-                # commands sent afterward can still layer on top of it
-                cmds.insert(0, self._target)
+                cmds.append(self._target)
                 self._target = None
         for cmd in cmds:
             self.on_line("tx", json.dumps(cmd, separators=(",", ":")))

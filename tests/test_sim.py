@@ -33,6 +33,7 @@ def test_slews_toward_target():
 def test_set_target_single_joint_and_gripper():
     sim = make()
     sim.set_target(P.HOME.with_joint("elbow", 1.0))
+    sim.step(0.1)
     sim.send(P.cmd_joint("base", -0.5))
     sim.send(P.cmd_gripper(P.GRIP_OPEN))
     for _ in range(30):
@@ -41,6 +42,15 @@ def test_set_target_single_joint_and_gripper():
     assert pose.elbow == pytest.approx(1.0)
     assert pose.base == pytest.approx(-0.5)
     assert pose.hand == pytest.approx(P.GRIP_OPEN)
+
+
+def test_target_applied_after_queue():
+    sim = make()
+    sim.send(P.cmd_joint("base", -0.5))
+    sim.set_target(P.HOME.with_joint("base", 0.5))
+    for _ in range(30):
+        sim.step(0.1)
+    assert sim.state.pose.base == pytest.approx(0.5)
 
 
 def test_home_command():
