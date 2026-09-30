@@ -28,7 +28,7 @@ async def open_teach(pilot, app):
 
 
 def make_app(tmp_path):
-    return RoArmApp(SimDevice(boot_time=0.0, rate=50), sequence_dir=tmp_path)
+    return RoArmApp(SimDevice(boot_time=0.0, rate=10), sequence_dir=tmp_path)
 
 
 async def test_capture_button_fills_table(tmp_path):
@@ -36,6 +36,7 @@ async def test_capture_button_fills_table(tmp_path):
     async with app.run_test(size=SIZE) as pilot:
         tab = await open_teach(pilot, app)
         await pilot.click("#wp-capture")
+        await pilot.pause()
         await pilot.click("#wp-capture")
         assert tab.query_one(DataTable).row_count == 2
 

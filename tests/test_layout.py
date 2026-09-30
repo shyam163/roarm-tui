@@ -12,7 +12,7 @@ SIZES = [(80, 24), (140, 45)]
 
 
 def make_app(tmp_path):
-    return RoArmApp(SimDevice(boot_time=0.0, rate=50), sequence_dir=tmp_path)
+    return RoArmApp(SimDevice(boot_time=0.0, rate=10), sequence_dir=tmp_path)
 
 
 async def wait_for(pilot, cond, timeout=3.0):

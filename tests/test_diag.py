@@ -36,7 +36,7 @@ async def open_diag(pilot, app):
 
 
 def make_app(tmp_path):
-    return RoArmApp(SimDevice(boot_time=0.0, rate=50), sequence_dir=tmp_path)
+    return RoArmApp(SimDevice(boot_time=0.0, rate=10), sequence_dir=tmp_path)
 
 
 async def test_log_filters_polling(tmp_path):
