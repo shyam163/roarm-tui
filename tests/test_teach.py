@@ -1,7 +1,7 @@
 import time
 
 import pytest
-from textual.widgets import DataTable, Input, Select
+from textual.widgets import Button, DataTable, Input, Select
 
 from roarm import protocol as P
 from roarm.app import RoArmApp
@@ -102,6 +102,20 @@ async def test_record_creates_trajectory(tmp_path):
         assert app.recorder is None
         assert tab.sequence.kind == "trajectory"
         assert len(tab.sequence.points) >= 3
+
+
+async def test_play_while_recording_is_refused(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_teach(pilot, app)
+        tab.sequence = Sequence("x", "waypoints", [Point(P.HOME.with_joint("base", 1.0), 0.2)])
+        tab.refresh_table()
+        await pilot.click("#teach-record")
+        assert app.recorder is not None
+        await pilot.click("#teach-play")
+        assert app.player is None
+        assert app.recorder is not None
+        assert str(tab.query_one("#teach-record", Button).label) == "⏹ Stop recording"
 
 
 async def test_save_and_load(tmp_path):

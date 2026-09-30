@@ -316,7 +316,8 @@ class RoArmApp(App):
             self.notify(NOT_READY_MSG, severity="warning")
             return False
         if self.recorder is not None:
-            self.stop_recording()
+            self.notify("Stop recording first", severity="warning")
+            return False
         self.device.clear_queue()
         if not self.torque_on:
             self._set_torque(True)

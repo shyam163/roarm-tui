@@ -73,6 +73,8 @@ class TeachTab(Container):
         self.query_one("#teach-torque", Button).label = TORQUE_OFF_LABEL if on else TORQUE_ON_LABEL
 
     def refresh_status(self) -> None:
+        self.query_one("#teach-record", Button).label = (
+            "⏹ Stop recording" if self.app.recorder is not None else "⏺ Record")
         seq = self.sequence
         t = Text()
         t.append(seq.name, style="bold")
@@ -167,13 +169,10 @@ class TeachTab(Container):
         self.query_one(DataTable).move_cursor(row=row)
 
     def _toggle_record(self) -> None:
-        button = self.query_one("#teach-record", Button)
         if self.app.recorder is None:
             self.app.start_recording()
-            button.label = "⏹ Stop recording"
             return
         seq = self.app.stop_recording()
-        button.label = "⏺ Record"
         if not seq.points:
             self.notify("No samples recorded (no feedback?).", severity="warning")
             return
