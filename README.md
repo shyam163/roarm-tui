@@ -30,3 +30,23 @@ sent to the arm unmodified (no clamping, no target tracking). The jog target
 follows the arm's reported pose until your next jog, home, playback or E-stop,
 but the console itself will happily send anything valid JSON, including
 out-of-range joint angles.
+
+## Wi-Fi
+
+The arm runs its own hotspot `RoArm-M2` (password `12345678`, arm at `192.168.4.1`) and can
+also join your network. Set that up once over USB: **Diagnostics → Wi-Fi setup → Join
+network**. The arm keeps its hotspot as a fallback; the IP it gets is saved to
+`~/.config/roarm/config.json` (passwords are never saved).
+
+```bash
+.venv/bin/roarm                 # USB, plus Wi-Fi if an IP is saved — press c to switch
+.venv/bin/roarm --wifi          # start on Wi-Fi (saved IP, else the hotspot)
+.venv/bin/roarm --wifi 192.168.1.59 --no-usb   # Wi-Fi only; never opens USB (no reset)
+```
+
+| Key | Action |
+|---|---|
+| `c` | switch between USB and Wi-Fi control |
+
+Your PC must be on a network that can reach the arm. The arm's HTTP API has no
+authentication — anyone on the same network can drive it.

@@ -2,7 +2,7 @@ import math
 import time
 
 import pytest
-from textual.widgets import Checkbox, Input, RichLog
+from textual.widgets import Button, Checkbox, Input, RichLog
 
 from roarm import protocol as P
 from roarm.app import RoArmApp
@@ -174,3 +174,47 @@ def test_history_input_standalone():
     h.add_history("a")                       # duplicates collapse
     h.add_history("b")
     assert h.history == ["a", "b"]
+
+
+def log_text(tab):
+    return "\n".join("".join(seg.text for seg in strip) for strip in tab.query_one(RichLog).lines)
+
+
+async def test_log_masks_passwords(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_diag(pilot, app)
+        tab.add_line("tx", '{"T":407,"mode":3,"sta_ssid":"home","sta_password":"example-pass"}')
+        tab.add_line("rx", '{"wifi_mode_on_boot":3,"sta_ssid":"home","sta_password":"example-pass","ip":"1.2.3.4","rssi":-40}')
+        await pilot.pause()
+        text = log_text(tab)
+        assert "example-pass" not in text and '"***"' in text
+        info = str(tab.query_one("#dev-info").render())
+        assert "ssid home" in info and "example-pass" not in info
+
+
+async def test_join_button_calls_configure_wifi_and_clears_password(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_diag(pilot, app)
+        calls = []
+        app.configure_wifi = lambda ssid, pw: calls.append((ssid, pw)) or True
+        tab.query_one("#wifi-ssid", Input).value = "home"
+        tab.query_one("#wifi-password", Input).value = "secret"
+        tab.query_one("#wifi-join", Button).press()
+        await pilot.pause()
+        assert calls == [("home", "secret")]
+        assert tab.query_one("#wifi-password", Input).value == ""
+        assert tab.query_one("#wifi-password", Input).password is True
+
+
+async def test_join_failure_keeps_inputs(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_diag(pilot, app)
+        app.configure_wifi = lambda ssid, pw: False
+        tab.query_one("#wifi-ssid", Input).value = "home"
+        tab.query_one("#wifi-password", Input).value = "secret"
+        tab.query_one("#wifi-join", Button).press()
+        await pilot.pause()
+        assert tab.query_one("#wifi-password", Input).value == "secret"

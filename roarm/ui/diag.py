@@ -10,7 +10,7 @@ from collections import deque
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Checkbox, Input, Label, RichLog, Sparkline, Static
 
 from roarm import protocol as P
@@ -75,18 +75,23 @@ class DiagTab(Container):
                     yield Checkbox("Pause", id="pause-log")
                     yield Button("Clear", id="log-clear")
                 yield HistoryInput(placeholder='JSON command, e.g. {"T":105}  (↑/↓ history)', id="console")
-            with Vertical(id="diag-side", classes="panel"):
+            with VerticalScroll(id="diag-side", classes="panel"):
                 for j in P.JOINTS:
                     yield Label(P.JOINT_LABELS[j])
                     yield Sparkline(list(self._loads[j]), summary_function=max, id=f"spark-{j}")
                 yield Static("", id="dev-info")
                 yield Button("Query device info", id="diag-info")
+                yield Label("Wi-Fi setup (over USB)", classes="section-title")
+                yield Input(placeholder="network name (SSID)", id="wifi-ssid")
+                yield Input(placeholder="password", password=True, id="wifi-password")
+                yield Button("Join network", id="wifi-join", variant="primary")
 
     def on_mount(self) -> None:
         self.query_one("#log-panel").border_title = "SERIAL"
         self.query_one("#diag-side").border_title = "LOADS & DEVICE"
 
     def add_line(self, direction: str, text: str) -> None:
+        text = P.mask_secrets(text)
         self._capture_info(text)
         if self.query_one("#pause-log", Checkbox).value:
             return
@@ -109,7 +114,10 @@ class DiagTab(Container):
         elif '"ip"' in text:
             msg = P.parse_line(text)
             if msg is not None:
-                self._info["Wi-Fi"] = f"ip {msg.get('ip')}  rssi {msg.get('rssi')}"
+                wifi = f"ip {msg.get('ip')}  rssi {msg.get('rssi')}"
+                if msg.get("sta_ssid"):
+                    wifi += f"  ssid {msg['sta_ssid']}"
+                self._info["Wi-Fi"] = wifi
         else:
             return
         info = Text()
@@ -126,6 +134,12 @@ class DiagTab(Container):
             event.stop()
             self.app.device.send(P.cmd_mac())
             self.app.device.send(P.cmd_wifi_info())
+        elif event.button.id == "wifi-join":
+            event.stop()
+            ssid = self.query_one("#wifi-ssid", Input).value
+            password_input = self.query_one("#wifi-password", Input)
+            if self.app.configure_wifi(ssid, password_input.value):
+                password_input.value = ""  # don't keep the password around in the UI
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "console":

@@ -152,6 +152,16 @@ Sparkline {
     margin-bottom: 1;
 }
 
+.section-title {
+    margin-top: 1;
+    text-style: bold;
+    color: $accent;
+}
+
+#diag-side Input, #diag-side Button {
+    width: 100%;
+}
+
 /* Modal */
 ConfirmScreen {
     align: center middle;
