@@ -2,6 +2,11 @@
 
 Same interface as ArmDevice. One request in flight at a time; connecting over
 Wi-Fi does not reset the arm, so there is no boot phase.
+
+Commands from the explicit send()/send_now() queue are absolute/idempotent
+(poses, home, torque), so a single transient failure gets one retry before the
+command is dropped. Jog targets and feedback polls are superseded by the next
+one anyway, so they are never retried — only logged on failure.
 """
 
 from __future__ import annotations
@@ -53,6 +58,7 @@ class WifiDevice:
         self._failures = 0
         self._queue: deque[dict] = deque()
         self._target: dict | None = None
+        self._retry_of: dict | None = None  # queue item currently allowed one retry
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -92,6 +98,7 @@ class WifiDevice:
         with self._lock:
             self._queue.clear()
             self._target = None
+            self._retry_of = None
 
     def set_host(self, host: str) -> None:
         """Point at a new IP; the worker drops its connection before the next request."""
@@ -108,7 +115,8 @@ class WifiDevice:
             self._host_changed = False
             self._close_conn()
         if not self.connected:
-            if self._request(P.cmd_feedback()):
+            ok, _ = self._request(P.cmd_feedback())
+            if ok:
                 self.connected = True
                 self.clear_queue()  # nothing issued while offline may reach the arm
                 self.on_line("sys", f"reached the arm at {self.host}")
@@ -116,27 +124,48 @@ class WifiDevice:
             else:
                 self._stop.wait(self.reconnect_delay)
             return
-        cmd = self._next_cmd(self.clock())
+        cmd, source = self._next_cmd(self.clock())
         if cmd is None:
             self._stop.wait(self.idle_wait)
             return
-        self._request(cmd)
+        ok, err = self._request(cmd)
+        if ok:
+            if source == "queue":
+                self._retry_of = None
+        elif self.connected:
+            self._handle_failed_send(cmd, source, err)
 
     # --- internals ----------------------------------------------------------
-    def _next_cmd(self, now: float) -> dict | None:
+    def _next_cmd(self, now: float) -> tuple[dict, str] | tuple[None, None]:
         with self._lock:
             if self._queue:
-                return self._queue.popleft()
+                return self._queue.popleft(), "queue"
             if self._target is not None and now - self._last_target_tx >= self.jog_interval:
                 cmd, self._target = self._target, None
                 self._last_target_tx = now
-                return cmd
+                return cmd, "target"
         if now - self._last_poll >= self.poll_interval:
             self._last_poll = now
-            return P.cmd_feedback()
-        return None
+            return P.cmd_feedback(), "poll"
+        return None, None
 
-    def _request(self, cmd: dict) -> bool:
+    def _handle_failed_send(self, cmd: dict, source: str, err: Exception) -> None:
+        """Called on the worker thread after a failed request that did not disconnect us."""
+        if source == "queue":
+            if cmd is self._retry_of:
+                # already retried once and failed again — drop it
+                self._retry_of = None
+                return
+            with self._lock:
+                self._queue.appendleft(cmd)
+            self._retry_of = cmd
+            text = json.dumps(cmd, separators=(",", ":"))
+            self.on_line("sys", f"request failed ({err}) — retrying {text}")
+        elif source == "target":
+            text = json.dumps(cmd, separators=(",", ":"))
+            self.on_line("sys", f"jog target failed ({err}): {text}")
+
+    def _request(self, cmd: dict) -> tuple[bool, Exception | None]:
         text = json.dumps(cmd, separators=(",", ":"))
         self.on_line("tx", text)
         try:
@@ -150,11 +179,11 @@ class WifiDevice:
         except (OSError, http.client.HTTPException) as e:
             self._close_conn()
             self._failure(e)
-            return False
+            return False, e
         self._failures = 0
         for line in body.splitlines():
             self._handle_line(line.strip())
-        return True
+        return True, None
 
     def _failure(self, err: Exception) -> None:
         self._failures += 1

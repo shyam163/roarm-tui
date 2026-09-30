@@ -158,6 +158,71 @@ def test_rx_lines_logged():
     assert any(d == "rx" and t.startswith('{"T":1051') for d, t in dev.lines)
 
 
+def test_queued_command_retried_once_after_transient_failure():
+    dev, fake, clock = make()
+    online(dev, fake)
+    dev.send({"T": 100})
+    fake.fail_next = 1
+    clock.advance(0.06)
+    dev.run_once()
+    assert dev.connected
+    assert list(dev._queue) == [{"T": 100}]
+    assert any(d == "sys" and "retrying" in t for d, t in dev.lines)
+    clock.advance(0.06)
+    dev.run_once()
+    assert fake.sent()[-1] == {"T": 100}
+    assert list(dev._queue) == []
+
+
+def test_queued_command_not_retried_twice():
+    dev, fake, clock = make()
+    online(dev, fake)
+    dev.send({"T": 1})
+    fake.fail_next = 2
+    clock.advance(0.06)
+    dev.run_once()                     # first failure -> requeued as a retry
+    assert dev.connected
+    clock.advance(0.06)
+    dev.run_once()                     # second failure (the retry itself) -> dropped
+    assert dev.connected
+    assert list(dev._queue) == [] and dev._target is None
+    clock.advance(0.06)
+    dev.run_once()
+    assert fake.sent()[-1] == {"T": 105}   # next request is a poll, not another retry
+
+
+def test_commands_sent_while_offline_are_discarded():
+    dev, fake, clock = make()
+    online(dev, fake)
+    dev.send({"T": 999})
+    fake.fail = True
+    for _ in range(3):
+        clock.advance(0.06)
+        dev.run_once()
+    assert not dev.connected and dev.statuses[-1] == "disconnected"
+    dev.send({"T": 1})
+    dev.set_target(HOME)
+    fake.fail = False
+    clock.advance(0.06)
+    dev.run_once()
+    assert dev.connected
+    assert fake.sent() == [{"T": 105}]
+
+
+def test_jog_target_failure_is_not_retried_but_logged():
+    dev, fake, clock = make()
+    online(dev, fake)
+    dev.set_target(Pose(base=0.5))
+    fake.fail_next = 1
+    clock.advance(0.06)
+    dev.run_once()
+    assert dev.connected and dev._target is None
+    assert any(d == "sys" and "jog target failed" in t for d, t in dev.lines)
+    clock.advance(0.06)
+    dev.run_once()
+    assert fake.sent()[-1] == {"T": 105}   # not retried — poll goes out next
+
+
 def test_start_stop_thread():
     fake = FakeHTTP()
     dev = WifiDevice("10.0.0.2", http_factory=lambda h, t: fake, reconnect_delay=0)

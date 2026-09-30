@@ -71,11 +71,15 @@ class FakeHTTP:
     def __init__(self):
         self.requests: list[str] = []
         self.fail = False
+        self.fail_next = 0
         self.status = 200
         self.closed = 0
         self.replies = {105: FEEDBACK_JSON}
 
     def request(self, method, url):
+        if self.fail_next > 0:
+            self.fail_next -= 1
+            raise ConnectionRefusedError("connection refused")
         if self.fail:
             raise ConnectionRefusedError("connection refused")
         assert method == "GET"
