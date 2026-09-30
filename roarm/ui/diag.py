@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections import deque
 
@@ -16,6 +17,13 @@ from roarm import protocol as P
 
 def _reject_non_finite(token: str) -> float:
     raise ValueError(f"{token} is not a finite number")
+
+
+def _finite_float(token: str) -> float:
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError(f"{token} is not a finite number")
+    return value
 
 
 HISTORY_LEN = 120
@@ -127,14 +135,14 @@ class DiagTab(Container):
         if not text:
             return
         try:
-            cmd = json.loads(text, parse_constant=_reject_non_finite)
+            cmd = json.loads(text, parse_constant=_reject_non_finite, parse_float=_finite_float)
             if not isinstance(cmd, dict):
                 raise ValueError("command must be a JSON object")
         except ValueError as e:
             self.notify(f"Invalid JSON: {e}", severity="error", markup=False)
             return
         self.app.device.send(cmd)
-        self.app.needs_sync = True  # console is RAW — resync the jog target to the next feedback
+        self.app.follow_feedback = True  # console is RAW — track the arm until the user's next move
         console = self.query_one("#console", HistoryInput)
         console.add_history(text)
         console.value = ""

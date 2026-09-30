@@ -63,16 +63,31 @@ class RoArmApp(App):
         self.status_text = "starting"
         self._last_state_time = 0.0
         self._loop: asyncio.AbstractEventLoop | None = None
+        self.follow_feedback = False
+        self._last_warn: dict[str, float] = {}
+
+    @property
+    def fresh(self) -> bool:
+        """A feedback frame arrived within STALE_AFTER seconds."""
+        return self.state is not None and time.monotonic() - self._last_state_time < STALE_AFTER
 
     @property
     def ready(self) -> bool:
-        """True once connected, past boot, and resynced to a fresh feedback pose.
+        """Connected, past boot, resynced, and receiving fresh feedback.
 
         Commands sent while not ready could replay against a stale target after a
         reboot or reconnect — every motion-issuing action must refuse while this
         is False.
         """
-        return self.device.connected and not self.device.booting and not self.needs_sync
+        return (self.device.connected and not self.device.booting
+                and not self.needs_sync and self.fresh)
+
+    def _warn(self, message: str) -> None:
+        """Warning toast, at most once per message every 2 s (slider drags fire many times)."""
+        now = time.monotonic()
+        if now - self._last_warn.get(message, float("-inf")) >= 2.0:
+            self._last_warn[message] = now
+            self.notify(message, severity="warning")
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -116,7 +131,7 @@ class RoArmApp(App):
         self.state = state
         self._last_state_time = time.monotonic()
         playing = self.player is not None and self.player.running
-        if self.needs_sync or not self.torque_on or playing:
+        if self.needs_sync or self.follow_feedback or not self.torque_on or playing:
             self.target = state.pose
             self.needs_sync = False
         if self.recorder is not None:
@@ -205,13 +220,14 @@ class RoArmApp(App):
     def jog(self, joint: str, rad: float) -> None:
         control = self.query_one(ControlTab)
         if not self.ready:
-            self.notify(NOT_READY_MSG, severity="warning")
+            self._warn(NOT_READY_MSG)
             control.sync_targets(self.target)
             return
         if not self.torque_on:
-            self.notify("Torque is off — turn it on (t) to jog.", severity="warning")
+            self._warn("Torque is off — turn it on (t) to jog.")
             control.sync_targets(self.target)
             return
+        self.follow_feedback = False
         if self.player is not None and self.player.running:
             self.stop_playback()
         self.target = self.target.with_joint(joint, rad)
@@ -248,12 +264,13 @@ class RoArmApp(App):
     # --- arm actions --------------------------------------------------------
     def action_home(self) -> None:
         if not self.ready:
-            self.notify(NOT_READY_MSG, severity="warning")
+            self._warn(NOT_READY_MSG)
             self.query_one(ControlTab).sync_targets(self.target)
             return
         if not self.torque_on:
             self.notify("Torque is off — turn it on (t) first.", severity="warning")
             return
+        self.follow_feedback = False
         self.stop_playback()
         self.device.clear_queue()
         self.target = P.HOME
@@ -263,17 +280,23 @@ class RoArmApp(App):
     def action_estop(self) -> None:
         if self.player is not None:
             self.player.stop()
+        self.follow_feedback = False
         self.device.clear_queue()
-        if self.ready and self.state is not None and self.torque_on:
+        holdable = self.device.connected and not self.device.booting and self.fresh
+        if holdable and self.torque_on:
             self.target = self.state.pose
+            # send_now prepends: queue ends up [torque on, hold] — re-assert torque in case
+            # an E-stop right after torque-on just cleared the queued T:210
             self.device.send_now(P.cmd_joints(self.state.pose, spd=0, acc=0))
+            self.device.send_now(P.cmd_torque(True))
             self.query_one(ControlTab).sync_targets(self.target)
         self.notify("E-STOP — holding position", severity="error")
         self.query_one(TeachTab).refresh_status()
 
     def _set_torque(self, on: bool) -> None:
+        self.follow_feedback = False
         self.device.send(P.cmd_torque(on))
-        if on and self.state is not None:
+        if on and self.fresh:
             # hold where the hand left it — otherwise the servos can snap to a stale target
             self.device.send(P.cmd_joints(self.state.pose, spd=0, acc=10))
             self.target = self.state.pose
@@ -304,7 +327,7 @@ class RoArmApp(App):
 
     def action_capture(self) -> None:
         if not self.ready:
-            self.notify(NOT_READY_MSG, severity="warning")
+            self._warn(NOT_READY_MSG)
             return
         if self.state is None:
             self.notify("No feedback yet — nothing to capture.", severity="warning")
@@ -318,11 +341,12 @@ class RoArmApp(App):
             self.notify("Nothing to play — capture or load a sequence first.", severity="warning")
             return False
         if not self.ready:
-            self.notify(NOT_READY_MSG, severity="warning")
+            self._warn(NOT_READY_MSG)
             return False
         if self.recorder is not None:
             self.notify("Stop recording first", severity="warning")
             return False
+        self.follow_feedback = False
         self.device.clear_queue()
         if not self.torque_on:
             self._set_torque(True)

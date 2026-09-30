@@ -151,19 +151,20 @@ async def test_console_send_resyncs_jog_target(tmp_path):
         tab = await open_diag(pilot, app)
         app.device.stop()                # halt the sim thread; drive feedback manually below
         app.device.connected = True      # still "connected" for readiness purposes
-        assert app.needs_sync is False   # already synced from the initial connect
+        assert app.follow_feedback is False   # already synced from the initial connect
         console = tab.query_one("#console", Input)
         console.focus()
         console.value = '{"T":102,"base":1.0,"shoulder":0,"elbow":1.57,"hand":3.14,"spd":0,"acc":10}'
         await pilot.press("enter")
-        assert app.needs_sync is True    # raw console send marks the target stale
+        assert app.follow_feedback is True    # raw console send tracks the arm until the next move
         # the next feedback frame reports the arm has moved to the commanded pose
         app._handle_state(P.ArmState(P.HOME.with_joint("base", 1.0), 0, 0, 0, {}, time.monotonic()))
-        assert app.needs_sync is False
+        assert app.follow_feedback is True    # still tracking — no motion command has cancelled it
         assert app.target.base == pytest.approx(1.0)
         app.set_focus(None)               # console keeps focus after submit
         before = app.target.base
-        await pilot.press("d")            # jog + on base (selected by default)
+        await pilot.press("d")            # jog + on base (selected by default) cancels follow_feedback
+        assert app.follow_feedback is False
         assert app.target.base == pytest.approx(before + math.radians(app.step_deg))
 
 
