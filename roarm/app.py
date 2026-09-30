@@ -10,6 +10,7 @@ from pathlib import Path
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.css.query import NoMatches
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from roarm import protocol as P
@@ -34,10 +35,10 @@ class RoArmApp(App):
         Binding("t", "toggle_torque", "Torque"),
         Binding("g", "toggle_grip", "Grip"),
         Binding("space", "capture", "Capture"),
-        Binding("left,a", "jog(-1)", "Jog −", show=False),
-        Binding("right,d", "jog(1)", "Jog +", show=False),
-        Binding("up,w", "select_delta(-1)", "Prev joint", show=False),
-        Binding("down,s", "select_delta(1)", "Next joint", show=False),
+        Binding("left,a", "jog(-1)", "Jog −", key_display="←/a"),
+        Binding("right,d", "jog(1)", "Jog +", key_display="→/d"),
+        Binding("up,w", "select_delta(-1)", "Prev joint", key_display="↑/w"),
+        Binding("down,s", "select_delta(1)", "Next joint", key_display="↓/s"),
         Binding("1", "select_joint(0)", show=False),
         Binding("2", "select_joint(1)", show=False),
         Binding("3", "select_joint(2)", show=False),
@@ -86,6 +87,8 @@ class RoArmApp(App):
         self._refresh_status()
 
     def on_unmount(self) -> None:
+        if self.player is not None:
+            self.player.stop()
         self.device.stop()
 
     # --- device callbacks (arrive on the device thread) ---------------------
@@ -110,13 +113,13 @@ class RoArmApp(App):
         try:
             self.query_one(ControlTab).update_state(state, self.target, self.selected)
             self.query_one(DiagTab).add_loads(state.loads)
-        except Exception:
+        except NoMatches:
             return  # widgets not mounted yet / shutting down
 
     def _handle_line(self, direction: str, text: str) -> None:
         try:
             self.query_one(DiagTab).add_line(direction, text)
-        except Exception:
+        except NoMatches:
             pass
 
     def _handle_status(self, text: str) -> None:
@@ -128,7 +131,10 @@ class RoArmApp(App):
         elif text == "ready":
             self.needs_sync = True
             self.torque_on = True
-            self.query_one(TeachTab).set_torque(True)
+            try:
+                self.query_one(TeachTab).set_torque(True)
+            except NoMatches:
+                pass  # widgets not mounted yet / shutting down
             self.notify("Arm ready")
         elif text.startswith("cannot open"):
             self.notify(text, severity="error", timeout=6)
@@ -146,7 +152,7 @@ class RoArmApp(App):
             self.notify("Playback finished")
         try:
             self.query_one(TeachTab).refresh_status()
-        except Exception:
+        except NoMatches:
             pass  # widgets torn down during shutdown
 
     def _refresh_status(self) -> None:
@@ -178,7 +184,7 @@ class RoArmApp(App):
             t.append(f"  │  {self.status_text}", style="#f87171")
         try:
             self.query_one(StatusBar).update(t)
-        except Exception:
+        except NoMatches:
             pass  # widgets torn down during shutdown
 
     # --- jogging ------------------------------------------------------------
