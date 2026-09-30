@@ -175,3 +175,66 @@ async def test_online_status_does_not_claim_torque(tmp_path):
         app.torque_on = False
         app._handle_status("online")                      # synchronously: a feedback frame would clear needs_sync
         assert app.torque_on is False and app.needs_sync
+
+
+T405_REPLY = '{"wifi_mode_on_boot":3,"ip":"192.168.1.99","rssi":-40}'
+
+
+async def test_learning_ignored_while_wifi_active(tmp_path):
+    app, hub = make(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        hub.switch("wifi")
+        await wait_for(pilot, lambda: app.ready)
+        hub.devices["wifi"].on_line("rx", T405_REPLY)
+        await pilot.pause(0.2)
+        assert hub.devices["wifi"].host == "10.0.0.2"
+        assert not (tmp_path / "config.json").exists()
+
+
+async def test_learning_over_usb_ignores_non_ip(tmp_path):
+    app, hub = make(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        hub.devices["usb"].on_line("rx", '{"ip":"sim","rssi":0}')
+        await pilot.pause(0.2)
+        assert hub.devices["wifi"].host == "10.0.0.2"
+        assert not (tmp_path / "config.json").exists()
+
+
+async def test_probe_stops_on_switch(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "WIFI_PROBE_EVERY", 0.1)
+    app, hub = make(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        wifi_sent = []
+        real_send = hub.devices["wifi"].send
+        hub.devices["wifi"].send = lambda cmd: (wifi_sent.append(cmd), real_send(cmd))
+        assert app.configure_wifi("home", "pw") is True
+        assert app._wifi_probe_timer is not None
+        await pilot.press("c")
+        assert hub.active == "wifi" and app._wifi_probe_timer is None
+        await pilot.pause(0.5)
+        assert P.cmd_wifi_info() not in wifi_sent
+
+
+async def test_probe_stops_itself_when_not_on_usb(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "WIFI_PROBE_EVERY", 0.1)
+    app, hub = make(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        assert app.configure_wifi("home", "pw") is True
+        hub.switch("wifi")                                # bypasses the action's own stop
+        await wait_for(pilot, lambda: app._wifi_probe_timer is None)
+
+
+async def test_configure_wifi_refused_while_usb_booting(tmp_path):
+    app, hub = make(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        usb = hub.devices["usb"]
+        sent = []
+        usb.send = lambda cmd: sent.append(cmd)
+        usb.booting = True
+        assert app.configure_wifi("home", "pw") is False
+        assert sent == [] and app._wifi_probe_timer is None

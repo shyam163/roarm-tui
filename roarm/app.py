@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import math
 import time
 from pathlib import Path
@@ -125,6 +126,7 @@ class RoArmApp(App):
         self._refresh_status()
 
     def on_unmount(self) -> None:
+        self._stop_wifi_probe()
         if self.player is not None:
             self.player.stop()
         self.device.stop()
@@ -257,16 +259,24 @@ class RoArmApp(App):
         if self.recorder is not None:
             self._warn("Stop recording first")
             return
+        self._stop_wifi_probe()
         hub.switch(other)
 
     def _maybe_learn_wifi(self, text: str) -> None:
-        """A T:405 reply with a real IP teaches us (and the config) where the arm is on Wi-Fi."""
+        """A T:405 reply with a real IP teaches us (and the config) where the arm is on Wi-Fi.
+
+        Only trusted over USB: retargeting the live Wi-Fi link would bypass the switch protocol.
+        """
         hub = self.device
-        if not isinstance(hub, DeviceHub):
+        if not isinstance(hub, DeviceHub) or hub.active != "usb":
             return
         msg = P.parse_line(text)
         ip = msg.get("ip") if msg is not None else None
         if not isinstance(ip, str) or ip in ("", "0.0.0.0"):
+            return
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
             return
         self._stop_wifi_probe()
         wifi = hub.devices.get("wifi")
@@ -279,6 +289,7 @@ class RoArmApp(App):
         if wifi is None:
             hub.add("wifi", self.wifi_factory(ip))
         else:
+            wifi.clear_queue()      # inactive: nothing may replay against the new address later
             wifi.set_host(ip)
         self.notify(f"Arm is on Wi-Fi at {ip} — press c to switch", markup=False)
 
@@ -293,6 +304,9 @@ class RoArmApp(App):
             self.notify("Enter the network name (SSID)", severity="error")
             return False
         usb = hub.devices["usb"]
+        if not usb.connected or usb.booting:
+            self._warn("USB is still connecting — try again in a few seconds")
+            return False
         usb.send(P.cmd_wifi_config(ssid, password))
         usb.send(P.cmd_wifi_apply(ssid, password))
         self._stop_wifi_probe()
@@ -302,6 +316,10 @@ class RoArmApp(App):
         return True
 
     def _wifi_probe(self) -> None:
+        hub = self.device
+        if not isinstance(hub, DeviceHub) or hub.active != "usb":
+            self._stop_wifi_probe()
+            return
         if self._wifi_probes_left <= 0:
             self._stop_wifi_probe()
             self.notify("The arm didn't report a Wi-Fi IP — check the SSID and password", severity="error")
