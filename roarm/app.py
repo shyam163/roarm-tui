@@ -6,6 +6,7 @@ import asyncio
 import math
 import time
 from pathlib import Path
+from typing import Callable
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -14,14 +15,19 @@ from textual.css.query import NoMatches
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from roarm import protocol as P
+from roarm.config import load_config, save_config
+from roarm.hub import DeviceHub
 from roarm.sequence import SEQUENCE_DIR, Player, Recorder, Sequence
 from roarm.ui.control import ControlTab
 from roarm.ui.diag import DiagTab
 from roarm.ui.teach import TeachTab
 from roarm.ui.widgets import ConfirmScreen, StatusBar
+from roarm.wifi import WifiDevice
 
 STALE_AFTER = 1.0
 NOT_READY_MSG = "Arm not ready — waiting for connection/feedback"
+WIFI_PROBES = 20          # T:405 polls after sending new Wi-Fi settings
+WIFI_PROBE_EVERY = 1.5    # seconds between polls
 
 
 class RoArmApp(App):
@@ -35,6 +41,7 @@ class RoArmApp(App):
         Binding("h", "home", "Home"),
         Binding("t", "toggle_torque", "Torque"),
         Binding("g", "toggle_grip", "Grip"),
+        Binding("c", "switch_transport", "USB/Wi-Fi"),
         Binding("space", "capture", "Capture"),
         Binding("left,a", "jog(-1)", "Jog −", key_display="←/a"),
         Binding("right,d", "jog(1)", "Jog +", key_display="→/d"),
@@ -46,10 +53,13 @@ class RoArmApp(App):
         Binding("4", "select_joint(3)", show=False),
     ]
 
-    def __init__(self, device, sequence_dir: Path = SEQUENCE_DIR):
+    def __init__(self, device, sequence_dir: Path = SEQUENCE_DIR, config_path: Path | None = None,
+                 wifi_factory: Callable[[str], object] = WifiDevice):
         super().__init__()
         self.device = device
         self.sequence_dir = Path(sequence_dir)
+        self.config_path = config_path
+        self.wifi_factory = wifi_factory
         self.state: P.ArmState | None = None
         self.target: P.Pose = P.HOME
         self.torque_on = True
@@ -65,6 +75,8 @@ class RoArmApp(App):
         self._loop: asyncio.AbstractEventLoop | None = None
         self.follow_feedback = False
         self._last_warn: dict[str, float] = {}
+        self._wifi_probe_timer = None
+        self._wifi_probes_left = 0
 
     @property
     def fresh(self) -> bool:
@@ -147,6 +159,8 @@ class RoArmApp(App):
             self.query_one(DiagTab).add_line(direction, text)
         except NoMatches:
             pass
+        if direction == "rx":
+            self._maybe_learn_wifi(text)
 
     def _handle_status(self, text: str) -> None:
         previous = self.status_text
@@ -165,6 +179,19 @@ class RoArmApp(App):
             except NoMatches:
                 pass  # widgets not mounted yet / shutting down
             self.notify("Arm ready")
+        elif text == "online":
+            # Wi-Fi reachable: the arm did NOT reboot, so torque is whatever it was
+            self.needs_sync = True
+            self.notify("Arm reachable over Wi-Fi")
+        elif text.startswith("switched:"):
+            name = text.split(":", 1)[1]
+            if self.player is not None and self.player.running:
+                self.stop_playback()
+            self.follow_feedback = False
+            self.state = None
+            self.needs_sync = True
+            self._last_state_time = 0.0
+            self.notify(f"Now controlling the arm over {DeviceHub.LABELS.get(name, name)}")
         elif text.startswith("cannot open") and text != previous:
             self.notify(text, severity="error", timeout=6, markup=False)
         self._refresh_status()
@@ -196,7 +223,11 @@ class RoArmApp(App):
             dot, color, label = "●", "#4ade80", "connected"
         t = Text(no_wrap=True)
         t.append(f"{dot} {label}", style=f"bold {color}")
+        if isinstance(d, DeviceHub):
+            t.append(f"  [{d.label}]", style="bold #bb9af7")
         t.append(f"  {d.port}", style="#a9b1d6")
+        if isinstance(d, DeviceHub) and d.other() is not None:
+            t.append("  c: switch", style="#565f89")
         t.append("  │  ", style="#3b4261")
         if self.torque_on:
             t.append("⚡ torque ON", style="bold #4ade80")
@@ -215,6 +246,73 @@ class RoArmApp(App):
             self.query_one(StatusBar).update(t)
         except NoMatches:
             pass  # widgets torn down during shutdown
+
+    # --- transports / Wi-Fi ---------------------------------------------------
+    def action_switch_transport(self) -> None:
+        hub = self.device
+        other = hub.other() if isinstance(hub, DeviceHub) else None
+        if other is None:
+            self._warn("Only one connection available — start with --wifi, or set up Wi-Fi in Diagnostics")
+            return
+        if self.recorder is not None:
+            self._warn("Stop recording first")
+            return
+        hub.switch(other)
+
+    def _maybe_learn_wifi(self, text: str) -> None:
+        """A T:405 reply with a real IP teaches us (and the config) where the arm is on Wi-Fi."""
+        hub = self.device
+        if not isinstance(hub, DeviceHub):
+            return
+        msg = P.parse_line(text)
+        ip = msg.get("ip") if msg is not None else None
+        if not isinstance(ip, str) or ip in ("", "0.0.0.0"):
+            return
+        self._stop_wifi_probe()
+        wifi = hub.devices.get("wifi")
+        if wifi is not None and wifi.host == ip:
+            return
+        if self.config_path is not None:
+            cfg = load_config(self.config_path)
+            cfg["wifi_host"] = ip
+            save_config(cfg, self.config_path)
+        if wifi is None:
+            hub.add("wifi", self.wifi_factory(ip))
+        else:
+            wifi.set_host(ip)
+        self.notify(f"Arm is on Wi-Fi at {ip} — press c to switch", markup=False)
+
+    def configure_wifi(self, ssid: str, password: str) -> bool:
+        """Send new STA credentials over USB (AP stays on as a fallback), then poll for the IP."""
+        hub = self.device
+        if not isinstance(hub, DeviceHub) or "usb" not in hub.devices or hub.active != "usb":
+            self._warn("Wi-Fi setup needs the USB connection active — plug in USB and press c")
+            return False
+        ssid = ssid.strip()
+        if not ssid:
+            self.notify("Enter the network name (SSID)", severity="error")
+            return False
+        usb = hub.devices["usb"]
+        usb.send(P.cmd_wifi_config(ssid, password))
+        usb.send(P.cmd_wifi_apply(ssid, password))
+        self._stop_wifi_probe()
+        self._wifi_probes_left = WIFI_PROBES
+        self._wifi_probe_timer = self.set_interval(WIFI_PROBE_EVERY, self._wifi_probe)
+        self.notify(f"Sent Wi-Fi settings for {ssid} — waiting for the arm to join…", markup=False)
+        return True
+
+    def _wifi_probe(self) -> None:
+        if self._wifi_probes_left <= 0:
+            self._stop_wifi_probe()
+            self.notify("The arm didn't report a Wi-Fi IP — check the SSID and password", severity="error")
+            return
+        self._wifi_probes_left -= 1
+        self.device.send(P.cmd_wifi_info())
+
+    def _stop_wifi_probe(self) -> None:
+        if self._wifi_probe_timer is not None:
+            self._wifi_probe_timer.stop()
+            self._wifi_probe_timer = None
 
     # --- jogging ------------------------------------------------------------
     def jog(self, joint: str, rad: float) -> None:

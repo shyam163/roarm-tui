@@ -226,10 +226,11 @@ async def test_home_button(tmp_path):
 
 def test_cli_parses(monkeypatch):
     from roarm import __main__ as cli
+    monkeypatch.setattr(cli, "load_config", lambda: {})
     ran = {}
     monkeypatch.setattr(cli.RoArmApp, "run", lambda self: ran.setdefault("device", self.device))
     cli.main(["--sim"])
     assert isinstance(ran["device"], SimDevice)
     ran.clear()
     cli.main(["--port", "/dev/nothing"])
-    assert ran["device"].port == "/dev/nothing"
+    assert ran["device"].devices["usb"].port == "/dev/nothing"
