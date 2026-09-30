@@ -14,6 +14,10 @@ from textual.widgets import Button, Checkbox, Input, Label, RichLog, Sparkline, 
 
 from roarm import protocol as P
 
+def _reject_non_finite(token: str) -> float:
+    raise ValueError(f"{token} is not a finite number")
+
+
 HISTORY_LEN = 120
 MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 DIRECTION_STYLE = {"tx": ("→ ", "#7dcfff"), "rx": ("← ", "#9ece6a"), "sys": ("• ", "#e0af68")}
@@ -123,7 +127,7 @@ class DiagTab(Container):
         if not text:
             return
         try:
-            cmd = json.loads(text)
+            cmd = json.loads(text, parse_constant=_reject_non_finite)
             if not isinstance(cmd, dict):
                 raise ValueError("command must be a JSON object")
         except ValueError as e:

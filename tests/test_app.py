@@ -199,6 +199,20 @@ async def test_torque_on_holds_current_pose(tmp_path):
         assert app.target == pose
 
 
+async def test_repeated_cannot_open_status_notifies_once(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.state is not None)
+        calls = []
+        app.notify = lambda *a, **kw: calls.append((a, kw))
+        app._handle_status("cannot open /dev/ttyUSB0: no such file")
+        app._handle_status("cannot open /dev/ttyUSB0: no such file")
+        app._handle_status("cannot open /dev/ttyUSB0: no such file")
+        assert len(calls) == 1
+        app._handle_status("cannot open /dev/ttyUSB0: permission denied")
+        assert len(calls) == 2
+
+
 async def test_home_button(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=SIZE) as pilot:

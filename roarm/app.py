@@ -134,6 +134,7 @@ class RoArmApp(App):
             pass
 
     def _handle_status(self, text: str) -> None:
+        previous = self.status_text
         self.status_text = text
         if text == "disconnected":
             if self.player is not None and self.player.running:
@@ -149,7 +150,7 @@ class RoArmApp(App):
             except NoMatches:
                 pass  # widgets not mounted yet / shutting down
             self.notify("Arm ready")
-        elif text.startswith("cannot open"):
+        elif text.startswith("cannot open") and text != previous:
             self.notify(text, severity="error", timeout=6, markup=False)
         self._refresh_status()
 

@@ -113,6 +113,20 @@ async def test_invalid_json_notifies_without_markup(tmp_path):
         assert calls and calls[0][1].get("markup") is False
 
 
+async def test_console_rejects_nan_and_infinity(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_diag(pilot, app)
+        sent = []
+        app.device.send = sent.append
+        console = tab.query_one("#console", Input)
+        console.focus()
+        for bad in ('{"T":102,"base":NaN}', '{"T":102,"base":Infinity}', '{"T":102,"base":-Infinity}'):
+            console.value = bad
+            await pilot.press("enter")
+            assert sent == [] and console.value == bad
+
+
 async def test_device_info_captured(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=SIZE) as pilot:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,9 +55,15 @@ class Sequence:
             try:
                 pose = P.Pose.from_dict(pd)
                 if kind == "trajectory":
-                    points.append(Point(pose, dwell=0.0, t=float(pd["t"])))
+                    t = float(pd["t"])
+                    if not math.isfinite(t):
+                        raise ValueError(f"t must be finite, got {t}")
+                    points.append(Point(pose, dwell=0.0, t=t))
                 else:
-                    points.append(Point(pose, dwell=max(0.0, float(pd.get("dwell", 0.5)))))
+                    dwell = float(pd.get("dwell", 0.5))
+                    if not math.isfinite(dwell):
+                        raise ValueError(f"dwell must be finite, got {dwell}")
+                    points.append(Point(pose, dwell=max(0.0, dwell)))
             except (KeyError, TypeError, ValueError) as e:
                 raise ValueError(f"point {i + 1}: bad or missing value ({e})") from e
         if kind == "trajectory":

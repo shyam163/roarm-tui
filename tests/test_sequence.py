@@ -71,6 +71,10 @@ def test_from_dict_clamps_out_of_range():
     json.dumps({"version": 1, "kind": "trajectory", "points": [{"b": 0, "s": 0, "e": 0, "h": 2}]}),
     json.dumps({"version": 1, "kind": "trajectory", "points": [
         {"b": 0, "s": 0, "e": 0, "h": 2, "t": 1.0}, {"b": 0, "s": 0, "e": 0, "h": 2, "t": 0.5}]}),
+    '{"version": 1, "kind": "trajectory", "points": [{"b": 0, "s": 0, "e": 0, "h": 2, "t": NaN}]}',
+    '{"version": 1, "kind": "trajectory", "points": [{"b": 0, "s": 0, "e": 0, "h": 2, "t": Infinity}]}',
+    '{"version": 1, "kind": "waypoints", "points": [{"b": 0, "s": 0, "e": 0, "h": 2, "dwell": NaN}]}',
+    '{"version": 1, "kind": "waypoints", "points": [{"b": 0, "s": 0, "e": 0, "h": 2, "dwell": Infinity}]}',
 ])
 def test_load_rejects_bad_files(tmp_path, content):
     path = tmp_path / "bad.json"
