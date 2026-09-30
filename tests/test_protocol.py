@@ -105,3 +105,21 @@ def test_planar_points():
     assert pts[0] == (0.0, 0.0)
     assert pts[1] == pytest.approx((0.0, 238.0))
     assert pts[2] == pytest.approx((316.0, 238.0), abs=0.5)
+
+
+def test_wifi_commands():
+    assert P.cmd_wifi_config("net", "pw") == {
+        "T": 407, "mode": 3, "ap_ssid": "RoArm-M2", "ap_password": "12345678",
+        "sta_ssid": "net", "sta_password": "pw"}
+    assert P.cmd_wifi_apply("net", "pw") == {
+        "T": 404, "ap_ssid": "RoArm-M2", "ap_password": "12345678",
+        "sta_ssid": "net", "sta_password": "pw"}
+
+
+def test_mask_secrets():
+    text = '{"sta_ssid":"home","sta_password":"example-pass","ap_pawword":"x","password": "a\\"b","ip":"1.2.3.4"}'
+    masked = P.mask_secrets(text)
+    assert "example-pass" not in masked and '"x"' not in masked and 'a\\"b' not in masked
+    assert masked.count('"***"') == 3
+    assert '"sta_ssid":"home"' in masked and '"ip":"1.2.3.4"' in masked
+    assert P.mask_secrets("Moving BASE_JOINT") == "Moving BASE_JOINT"

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass, replace
 
 JOINTS = ("base", "shoulder", "elbow", "hand")
@@ -168,3 +169,29 @@ def planar_points(pose: Pose) -> list[tuple[float, float]]:
 def forward_kinematics(pose: Pose) -> tuple[float, float, float]:
     r, z = planar_points(pose)[2]
     return r * math.cos(pose.base), r * math.sin(pose.base), z
+
+
+DEFAULT_AP_SSID = "RoArm-M2"
+DEFAULT_AP_PASSWORD = "12345678"
+
+
+def cmd_wifi_config(ssid: str, password: str, ap_ssid: str = DEFAULT_AP_SSID,
+                    ap_password: str = DEFAULT_AP_PASSWORD) -> dict:
+    """Persist AP+STA mode (the arm keeps its own hotspot as a fallback)."""
+    return {"T": 407, "mode": 3, "ap_ssid": ap_ssid, "ap_password": ap_password,
+            "sta_ssid": ssid, "sta_password": password}
+
+
+def cmd_wifi_apply(ssid: str, password: str, ap_ssid: str = DEFAULT_AP_SSID,
+                   ap_password: str = DEFAULT_AP_PASSWORD) -> dict:
+    """Switch to AP+STA now, without waiting for a reboot."""
+    return {"T": 404, "ap_ssid": ap_ssid, "ap_password": ap_password,
+            "sta_ssid": ssid, "sta_password": password}
+
+
+# "sta_password", "ap_password", "password", and the firmware docs' "ap_pawword" typo
+_SECRET_RE = re.compile(r'("[A-Za-z_]*pa(?:ss|w)word"\s*:\s*)"(?:[^"\\]|\\.)*"')
+
+
+def mask_secrets(text: str) -> str:
+    return _SECRET_RE.sub(r'\1"***"', text)
