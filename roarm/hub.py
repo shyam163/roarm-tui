@@ -29,6 +29,13 @@ class DeviceHub:
         self._started = False
         for name, dev in devices.items():
             self._attach(name, dev)
+        self._mark_idle()
+
+    def _mark_idle(self) -> None:
+        for name, dev in self.devices.items():
+            set_idle = getattr(dev, "set_idle", None)
+            if set_idle is not None:
+                set_idle(name != self.active)
 
     def _attach(self, name: str, dev) -> None:
         self.devices[name] = dev
@@ -110,6 +117,7 @@ class DeviceHub:
         self.device.clear_queue()
         self.active = name
         self.device.clear_queue()
+        self._mark_idle()
         self.on_status(f"switched:{name}")
         return True
 
@@ -117,5 +125,6 @@ class DeviceHub:
         if name in self.devices:
             raise ValueError(f"transport {name!r} already exists")
         self._attach(name, dev)
+        self._mark_idle()
         if self._started:
             dev.start()

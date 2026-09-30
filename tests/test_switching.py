@@ -302,3 +302,40 @@ async def test_torque_reconcile_flag_cleared_by_frame_without_torque_fields(tmp_
         assert app.torque_on is True
         app._handle_state(_state({j: False for j in P.JOINTS}))
         assert app.torque_on is True
+
+
+async def test_setup_probe_ignores_reply_for_other_ssid_and_reports_match(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "WIFI_PROBE_EVERY", 0.1)
+    app, hub = make(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        notes = []
+        app.notify = lambda m, *a, **k: notes.append(m)
+        assert app.configure_wifi("home", "pw") is True
+        notes.clear()
+        usb = hub.devices["usb"]
+        usb.on_line("rx", '{"sta_ssid":"old-net","ip":"192.168.1.5","rssi":-40}')   # stale reply
+        await pilot.pause(0.2)
+        assert app._wifi_probe_timer is not None and notes == []
+        assert hub.devices["wifi"].host == "10.0.0.2"
+        # same IP as the current host still gets reported
+        usb.on_line("rx", '{"sta_ssid":"home","ip":"10.0.0.2","rssi":-40}')
+        await wait_for(pilot, lambda: app._wifi_probe_timer is None)
+        assert any("Arm joined home at 10.0.0.2" in m for m in notes)
+
+
+async def test_switch_resets_state_synchronously(tmp_path):
+    app, hub = make(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        sent = {"usb": [], "wifi": []}
+        for n in sent:
+            hub.devices[n].set_target = lambda *a, n=n, **k: sent[n].append(a)
+            hub.devices[n].send = lambda cmd, n=n: sent[n].append(cmd)
+        app.follow_feedback = True
+        app.action_switch_transport()                    # no pilot yield: posted "switched:" not yet run
+        assert app.state is None and app.needs_sync and not app.follow_feedback
+        assert app._last_state_time == 0.0
+        app.jog("base", 0.5)                              # same step: must be refused
+        app.action_home()
+        assert sent == {"usb": [], "wifi": []}

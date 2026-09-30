@@ -300,3 +300,11 @@ def test_send_now_beats_an_overdue_poll():
     assert fake.sent()[-1] == {"T": 105}                 # then the overdue poll
     dev.run_once()
     assert fake.sent()[-1]["T"] == 102
+
+
+def test_set_idle_slows_polling_and_restores():
+    dev, fake, clock = make(poll_interval=0.05)
+    dev.set_idle(True)
+    assert dev.poll_interval == 1.0
+    dev.set_idle(False)
+    assert dev.poll_interval == 0.05

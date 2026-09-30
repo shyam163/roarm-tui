@@ -123,3 +123,10 @@ def test_mask_secrets():
     assert masked.count('"***"') == 3
     assert '"sta_ssid":"home"' in masked and '"ip":"1.2.3.4"' in masked
     assert P.mask_secrets("Moving BASE_JOINT") == "Moving BASE_JOINT"
+
+
+def test_mask_secrets_is_case_insensitive():
+    text = '{"Password":"hunter2","STA_PASSWORD":"s3cret","Ap_Pawword":"zzz"}'
+    masked = P.mask_secrets(text)
+    assert "hunter2" not in masked and "s3cret" not in masked and "zzz" not in masked
+    assert masked.count('"***"') == 3

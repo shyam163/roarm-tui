@@ -127,3 +127,25 @@ def test_inactive_status_goes_to_background_callback():
     assert hub.statuses == []
     wifi.on_status("online")           # active: normal path, not background
     assert hub.statuses == ["online"] and seen == [("usb", "booting")]
+
+
+class IdleDev(SimDevice):
+    def __init__(self):
+        super().__init__()
+        self.idle = None
+
+    def set_idle(self, idle):
+        self.idle = idle
+
+
+def test_hub_marks_inactive_devices_idle():
+    usb, wifi = SimDevice(), IdleDev()               # plain SimDevice has no set_idle: must be tolerated
+    hub = DeviceHub({"usb": usb, "wifi": wifi}, active="usb")
+    assert wifi.idle is True
+    hub.switch("wifi")
+    assert wifi.idle is False
+    hub.switch("usb")
+    assert wifi.idle is True
+    late = IdleDev()
+    hub.add("late", late)
+    assert late.idle is True

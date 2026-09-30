@@ -79,6 +79,7 @@ class RoArmApp(App):
         self._last_warn: dict[str, float] = {}
         self._wifi_probe_timer = None
         self._wifi_probes_left = 0
+        self._wifi_setup_ssid: str | None = None   # SSID we asked the arm to join (while probing)
         self._torque_sync_pending = False   # reconcile torque_on with the next frame's torque fields
 
     @property
@@ -295,7 +296,15 @@ class RoArmApp(App):
             self._warn("Stop recording first")
             return
         self._stop_wifi_probe()
-        hub.switch(other)
+        if hub.switch(other):
+            # Apply the reset now, not when the posted "switched:" arrives: a key pressed
+            # in between must not act on the previous transport's pose (repeats harmlessly).
+            if self.player is not None and self.player.running:
+                self.stop_playback()
+            self.state = None
+            self.needs_sync = True
+            self._last_state_time = 0.0
+            self.follow_feedback = False
 
     def _maybe_learn_wifi(self, text: str) -> None:
         """A T:405 reply with a real IP teaches us (and the config) where the arm is on Wi-Fi.
@@ -313,20 +322,27 @@ class RoArmApp(App):
             ipaddress.ip_address(ip)
         except ValueError:
             return
+        probing = self._wifi_probe_timer is not None
+        setup_ssid = self._wifi_setup_ssid
+        if probing and msg.get("sta_ssid") != setup_ssid:
+            return          # a reply about some other network (stale) — keep probing
         self._stop_wifi_probe()
         wifi = hub.devices.get("wifi")
-        if wifi is not None and wifi.host == ip:
-            return
-        if self.config_path is not None:
-            cfg = load_config(self.config_path)
-            cfg["wifi_host"] = ip
-            save_config(cfg, self.config_path)
-        if wifi is None:
-            hub.add("wifi", self.wifi_factory(ip))
-        else:
-            wifi.clear_queue()      # inactive: nothing may replay against the new address later
-            wifi.set_host(ip)
-        self.notify(f"Arm is on Wi-Fi at {ip} — press c to switch", markup=False)
+        same = wifi is not None and wifi.host == ip
+        if not same:
+            if self.config_path is not None:
+                cfg = load_config(self.config_path)
+                cfg["wifi_host"] = ip
+                save_config(cfg, self.config_path)
+            if wifi is None:
+                hub.add("wifi", self.wifi_factory(ip))
+            else:
+                wifi.clear_queue()      # inactive: nothing may replay against the new address later
+                wifi.set_host(ip)
+        if probing:
+            self.notify(f"Arm joined {setup_ssid} at {ip} — press c to switch", markup=False)
+        elif not same:
+            self.notify(f"Arm is on Wi-Fi at {ip} — press c to switch", markup=False)
 
     def configure_wifi(self, ssid: str, password: str) -> bool:
         """Send new STA credentials over USB (AP stays on as a fallback), then poll for the IP."""
@@ -346,6 +362,7 @@ class RoArmApp(App):
         usb.send(P.cmd_wifi_apply(ssid, password))
         self._stop_wifi_probe()
         self._wifi_probes_left = WIFI_PROBES
+        self._wifi_setup_ssid = ssid
         self._wifi_probe_timer = self.set_interval(WIFI_PROBE_EVERY, self._wifi_probe)
         self.notify(f"Sent Wi-Fi settings for {ssid} — waiting for the arm to join…", markup=False)
         return True
@@ -366,6 +383,7 @@ class RoArmApp(App):
         if self._wifi_probe_timer is not None:
             self._wifi_probe_timer.stop()
             self._wifi_probe_timer = None
+        self._wifi_setup_ssid = None
 
     # --- jogging ------------------------------------------------------------
     def jog(self, joint: str, rad: float) -> None:

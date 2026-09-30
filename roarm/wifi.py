@@ -24,6 +24,8 @@ from typing import Callable
 
 from roarm import protocol as P
 
+IDLE_POLL_INTERVAL = 1.0
+
 
 def _noop(*_args) -> None:
     pass
@@ -42,6 +44,7 @@ class WifiDevice:
         self.http_factory = http_factory
         self.clock = clock
         self.poll_interval = poll_interval
+        self._active_poll_interval = poll_interval
         self.jog_interval = jog_interval
         self.timeout = timeout
         self.max_failures = max_failures
@@ -107,6 +110,10 @@ class WifiDevice:
             self._target = None
             self._retry_of = None
             self._gen += 1
+
+    def set_idle(self, idle: bool) -> None:
+        """Inactive transport: poll at 1 Hz (just enough to notice the arm) instead of 20 Hz."""
+        self.poll_interval = IDLE_POLL_INTERVAL if idle else self._active_poll_interval
 
     def set_host(self, host: str) -> None:
         """Point at a new IP; the worker drops its connection before the next request."""

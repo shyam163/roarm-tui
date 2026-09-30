@@ -190,7 +190,7 @@ def cmd_wifi_apply(ssid: str, password: str, ap_ssid: str = DEFAULT_AP_SSID,
 
 
 # "sta_password", "ap_password", "password", and the firmware docs' "ap_pawword" typo
-_SECRET_RE = re.compile(r'("[A-Za-z_]*pa(?:ss|w)word"\s*:\s*)"(?:[^"\\]|\\.)*"')
+_SECRET_RE = re.compile(r'("[A-Za-z_]*pa(?:ss|w)word"\s*:\s*)"(?:[^"\\]|\\.)*"', re.IGNORECASE)
 
 
 def mask_secrets(text: str) -> str:
