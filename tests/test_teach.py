@@ -20,8 +20,14 @@ async def wait_for(pilot, cond, timeout=3.0):
         await pilot.pause(0.05)
 
 
+async def click_again(pilot, app, selector):
+    """Textual ignores clicks on a Button for 0.2 s after a press (-active); wait that out."""
+    await wait_for(pilot, lambda: not app.query_one(selector, Button).has_class("-active"))
+    await pilot.click(selector)
+
+
 async def open_teach(pilot, app):
-    await wait_for(pilot, lambda: app.state is not None)
+    await wait_for(pilot, lambda: app.ready)
     app.query_one("TabbedContent").active = "tab-teach"
     await pilot.pause()
     return app.query_one(TeachTab)
@@ -36,8 +42,7 @@ async def test_capture_button_fills_table(tmp_path):
     async with app.run_test(size=SIZE) as pilot:
         tab = await open_teach(pilot, app)
         await pilot.click("#wp-capture")
-        await pilot.pause()
-        await pilot.click("#wp-capture")
+        await click_again(pilot, app, "#wp-capture")
         assert tab.query_one(DataTable).row_count == 2
 
 
@@ -66,7 +71,7 @@ async def test_set_dwell_validates(tmp_path):
         await pilot.click("#wp-set-dwell")
         assert tab.sequence.points[0].dwell == 2.5
         tab.query_one("#wp-dwell", Input).value = "-1"
-        await pilot.click("#wp-set-dwell")
+        await click_again(pilot, app, "#wp-set-dwell")
         assert tab.sequence.points[0].dwell == 2.5
 
 
@@ -99,7 +104,7 @@ async def test_record_creates_trajectory(tmp_path):
         assert app.recorder is not None
         app.jog("base", 0.5)
         await pilot.pause(0.5)
-        await pilot.click("#teach-record")
+        await click_again(pilot, app, "#teach-record")
         assert app.recorder is None
         assert tab.sequence.kind == "trajectory"
         assert len(tab.sequence.points) >= 3
