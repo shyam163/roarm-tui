@@ -6,7 +6,9 @@ Wi-Fi does not reset the arm, so there is no boot phase.
 Commands from the explicit send()/send_now() queue are absolute/idempotent
 (poses, home, torque), so a single transient failure gets one retry before the
 command is dropped. Jog targets and feedback polls are superseded by the next
-one anyway, so they are never retried — only logged on failure. A retry is only
+one anyway: a failed target is retried once, and only if no newer target or
+clear_queue() has intervened; polls are never retried. A stale kept-alive socket
+(reset by the arm) is transparently reconnected and resent once in _request. A retry is only
 re-queued if clear_queue() (e.g. an E-stop) hasn't run since the command was
 popped — tracked via a generation counter bumped inside clear_queue() — so a
 stale command can never jump ahead of fresher commands sent after a clear.
@@ -25,6 +27,10 @@ from typing import Callable
 from roarm import protocol as P
 
 IDLE_POLL_INTERVAL = 1.0
+
+
+_STALE_ERRORS = (ConnectionResetError, BrokenPipeError, http.client.RemoteDisconnected,
+                 http.client.BadStatusLine)
 
 
 def _noop(*_args) -> None:
@@ -65,6 +71,7 @@ class WifiDevice:
         self._queue: deque[dict] = deque()
         self._target: dict | None = None
         self._retry_of: dict | None = None  # queue item currently allowed one retry
+        self._target_retry_of: dict | None = None  # jog/playback target currently allowed one retry
         self._urgent = 0  # send_now() items at the head of the queue; they outrank an overdue poll
         self._gen = 0  # bumped by clear_queue(); guards stale retries from a cleared queue
         self._lock = threading.Lock()
@@ -109,6 +116,7 @@ class WifiDevice:
             self._urgent = 0
             self._target = None
             self._retry_of = None
+            self._target_retry_of = None
             self._gen += 1
 
     def set_idle(self, idle: bool) -> None:
@@ -150,6 +158,10 @@ class WifiDevice:
                 with self._lock:
                     if cmd is self._retry_of:
                         self._retry_of = None
+            elif source == "target":
+                with self._lock:
+                    if cmd is self._target_retry_of:
+                        self._target_retry_of = None
         elif self.connected:
             self._handle_failed_send(cmd, source, gen, err)
 
@@ -201,20 +213,34 @@ class WifiDevice:
                 text = json.dumps(cmd, separators=(",", ":"))
                 self.on_line("sys", f"request failed ({err}) — retrying {text}")
         elif source == "target":
+            restored = False
+            with self._lock:
+                if cmd is self._target_retry_of:
+                    self._target_retry_of = None      # already retried once — drop it
+                elif gen == self._gen and self._target is None:
+                    # not superseded by a newer target, no clear_queue() since the pop
+                    self._target = cmd
+                    self._target_retry_of = cmd
+                    restored = True
             text = json.dumps(cmd, separators=(",", ":"))
-            self.on_line("sys", f"jog target failed ({err}): {text}")
+            suffix = " — retrying" if restored else ""
+            self.on_line("sys", f"jog target failed ({err}){suffix}: {text}")
 
     def _request(self, cmd: dict) -> tuple[bool, Exception | None]:
         text = json.dumps(cmd, separators=(",", ":"))
         self.on_line("tx", text)
+        url = "/js?json=" + urllib.parse.quote(text, safe="")
+        reused = self._conn is not None
         try:
-            if self._conn is None:
-                self._conn = self.http_factory(self.host, self.timeout)
-            self._conn.request("GET", "/js?json=" + urllib.parse.quote(text, safe=""))
-            resp = self._conn.getresponse()
-            body = resp.read().decode("utf-8", errors="replace")
-            if resp.status != 200:
-                raise http.client.HTTPException(f"HTTP {resp.status}")
+            try:
+                body = self._exchange(url)
+            except _STALE_ERRORS:
+                if not reused:
+                    raise
+                # the kept-alive socket went stale (the arm's server resets idle
+                # connections): reconnect and resend once, quietly
+                self._close_conn()
+                body = self._exchange(url)
         except (OSError, http.client.HTTPException) as e:
             self._close_conn()
             self._failure(e)
@@ -223,6 +249,16 @@ class WifiDevice:
         for line in body.splitlines():
             self._handle_line(line.strip())
         return True, None
+
+    def _exchange(self, url: str) -> str:
+        if self._conn is None:
+            self._conn = self.http_factory(self.host, self.timeout)
+        self._conn.request("GET", url)
+        resp = self._conn.getresponse()
+        body = resp.read().decode("utf-8", errors="replace")
+        if resp.status != 200:
+            raise http.client.HTTPException(f"HTTP {resp.status}")
+        return body
 
     def _failure(self, err: Exception) -> None:
         self._failures += 1

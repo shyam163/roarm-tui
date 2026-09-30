@@ -72,6 +72,8 @@ class FakeHTTP:
         self.requests: list[str] = []
         self.fail = False
         self.fail_next = 0
+        self.reset_next = 0  # next N requests raise ConnectionResetError (stale keep-alive)
+        self.timeout_next = 0  # next N requests raise TimeoutError
         self.status = 200
         self.closed = 0
         self.replies = {105: FEEDBACK_JSON}
@@ -80,6 +82,12 @@ class FakeHTTP:
     def request(self, method, url):
         if self.on_request is not None:
             self.on_request()
+        if self.reset_next > 0:
+            self.reset_next -= 1
+            raise ConnectionResetError(104, "Connection reset by peer")
+        if self.timeout_next > 0:
+            self.timeout_next -= 1
+            raise TimeoutError("timed out")
         if self.fail_next > 0:
             self.fail_next -= 1
             raise ConnectionRefusedError("connection refused")

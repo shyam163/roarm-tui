@@ -224,7 +224,7 @@ def test_commands_sent_while_offline_are_discarded():
     assert fake.sent() == [{"T": 105}]
 
 
-def test_jog_target_failure_is_not_retried_but_logged():
+def test_jog_target_failure_is_logged_and_retried_once():
     dev, fake, clock = make()
     online(dev, fake)
     mute_polls(dev, clock)
@@ -232,12 +232,8 @@ def test_jog_target_failure_is_not_retried_but_logged():
     fake.fail_next = 1
     clock.advance(0.06)
     dev.run_once()
-    assert dev.connected and dev._target is None
-    assert any(d == "sys" and "jog target failed" in t for d, t in dev.lines)
-    unmute_polls(dev)
-    clock.advance(0.06)
-    dev.run_once()
-    assert fake.sent()[-1] == {"T": 105}   # not retried — poll goes out next
+    assert dev.connected and dev._target is not None   # restored for one retry
+    assert any(d == "sys" and "jog target failed" in t and "retrying" in t for d, t in dev.lines)
 
 
 def test_retry_dropped_if_queue_cleared_during_request():
@@ -372,3 +368,130 @@ def test_retried_urgent_command_stays_urgent():
     dev.poll_interval = 0.05                               # poll now badly overdue
     dev.run_once()
     assert fake.sent()[-1] == {"T": 210, "cmd": 1}
+
+
+def _target_cmd(base):
+    from roarm import protocol as P
+    return P.cmd_joints(Pose(base=base), spd=0, acc=10)
+
+
+def test_stale_keepalive_reset_is_retried_transparently():
+    dev, fake, clock = make()
+    online(dev, fake)
+    mute_polls(dev, clock)
+    n_conns = len(dev.hosts)
+    dev.send({"T": 100})
+    fake.reset_next = 1
+    clock.advance(0.06)
+    dev.run_once()
+    assert fake.sent() == [{"T": 100}]          # resent within the same run_once
+    assert len(dev.hosts) == n_conns + 1        # on a new connection
+    assert fake.closed >= 1
+    assert dev._failures == 0 and dev.connected
+    assert not any("failed" in t for d, t in dev.lines if d == "sys")
+    assert list(dev._queue) == [] and dev._retry_of is None
+
+
+def test_reset_on_fresh_connection_counts_as_failure():
+    dev, fake, clock = make()
+    online(dev, fake)
+    mute_polls(dev, clock)
+    dev.send({"T": 100})
+    fake.reset_next = 2                          # stale socket, and the fresh one resets too
+    clock.advance(0.06)
+    dev.run_once()
+    assert dev._failures == 1
+    assert fake.sent() == []
+    # a reset on a connection that was not reused is not resent immediately
+    dev2, fake2, clock2 = make()
+    online(dev2, fake2)
+    dev2._close_conn()
+    mute_polls(dev2, clock2)
+    dev2.send({"T": 100})
+    fake2.reset_next = 1
+    clock2.advance(0.06)
+    dev2.run_once()
+    assert dev2._failures == 1 and fake2.sent() == []
+
+
+def test_timeout_not_transparently_retried():
+    dev, fake, clock = make()
+    online(dev, fake)
+    mute_polls(dev, clock)
+    n_conns = len(dev.hosts)
+    dev.send({"T": 100})
+    fake.timeout_next = 1
+    clock.advance(0.06)
+    dev.run_once()
+    assert dev._failures == 1
+    assert fake.sent() == []                     # not resent in the same run_once
+    assert len(dev.hosts) == n_conns
+
+
+def test_failed_target_retried_once_if_not_superseded():
+    dev, fake, clock = make()
+    online(dev, fake)
+    mute_polls(dev, clock)
+    dev.set_target(Pose(base=0.5))
+    want = _target_cmd(0.5)
+    fake.reset_next = 2
+    clock.advance(0.06)
+    dev.run_once()
+    assert dev.connected and dev._target == want
+    assert any(d == "sys" and "jog target failed" in t and "retrying" in t for d, t in dev.lines)
+    clock.advance(0.06)
+    dev.run_once()
+    assert fake.sent() == [want]                 # sent on the next due slot
+    assert dev._target is None
+    # second failure drops it
+    dev.set_target(Pose(base=0.7))
+    want2 = _target_cmd(0.7)
+    fake.requests.clear()
+    fake.reset_next = 4
+    clock.advance(0.06)
+    dev.run_once()
+    assert dev._target == want2
+    clock.advance(0.06)
+    dev.run_once()
+    assert dev._target is None and dev.connected
+
+
+def test_failed_target_not_restored_if_superseded():
+    dev, fake, clock = make()
+    online(dev, fake)
+    mute_polls(dev, clock)
+    dev.set_target(Pose(base=0.5))
+    newer = _target_cmd(0.9)
+    fake.reset_next = 2
+
+    def supersede():
+        fake.on_request = None
+        dev.set_target(Pose(base=0.9))
+
+    fake.on_request = supersede
+    clock.advance(0.06)
+    dev.run_once()
+    assert dev._target == newer
+    clock.advance(0.06)
+    dev.run_once()
+    assert fake.sent() == [newer]                # the old target is never sent
+
+
+def test_failed_target_dropped_after_clear_queue():
+    dev, fake, clock = make()
+    online(dev, fake)
+    mute_polls(dev, clock)
+    dev.set_target(Pose(base=0.5))
+    fake.reset_next = 2
+
+    def estop():
+        fake.on_request = None
+        dev.clear_queue()
+
+    fake.on_request = estop
+    clock.advance(0.06)
+    dev.run_once()
+    assert dev._target is None
+    clock.advance(0.06)
+    dev.run_once()
+    assert fake.sent() == []
