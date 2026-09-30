@@ -123,6 +123,43 @@ async def test_disconnect_stops_playback(tmp_path):
         assert "disconnected" in str(app.query_one("#status").render())
 
 
+async def test_jog_refused_when_not_ready(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.state is not None)
+        before = app.target
+        calls = []
+        app.device.set_target = lambda *a, **kw: calls.append(("set_target", a, kw))
+        app.device.send = lambda *a, **kw: calls.append(("send", a, kw))
+        app.device.booting = True
+        await pilot.press("d")
+        assert app.target == before
+        assert calls == []
+
+
+async def test_disconnect_resets_state_and_needs_sync(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.state is not None)
+        app.device.stop()                   # halt the sim thread so it can't overwrite state
+        app._handle_status("disconnected")
+        assert app.state is None
+        assert app.needs_sync is True
+        assert app.ready is False
+
+
+async def test_estop_sends_no_motion_when_not_ready(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.state is not None)
+        calls = []
+        app.device.send_now = lambda *a, **kw: calls.append(("send_now", a, kw))
+        app.device.clear_queue = lambda: calls.append(("clear_queue",))
+        app.device.booting = True
+        await pilot.press("escape")
+        assert calls == [("clear_queue",)]
+
+
 async def test_home_button(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=SIZE) as pilot:

@@ -191,6 +191,43 @@ def test_open_failure_reports_status():
     assert dev.statuses[-1].startswith("cannot open /dev/fake")
 
 
+def test_boot_done_clears_commands_queued_during_boot():
+    dev, fake, clock = make()
+    dev.run_once()                       # opens, booting
+    dev.send({"T": 100})
+    dev.set_target(Pose(base=0.5))
+    fake.feed("RoArm-M2 started.\n")
+    dev.step()                           # boot marker -> boot done
+    assert not dev.booting
+    fake.tx.clear()
+    clock.advance(0.1); dev.step()
+    sent = fake.sent()
+    assert all(s.get("T") not in (100, 102) for s in sent)
+    assert sent == [{"T": 105}]
+
+
+def test_open_clears_commands_queued_while_disconnected():
+    dev, fake, clock = make()
+    ready(dev, fake, clock)
+    fake.fail = True
+    dev.send({"T": 1})
+    dev.run_once()                       # detects lost -> disconnected
+    assert not dev.connected
+    # commands queued while nothing is open (app didn't notice yet)
+    dev.send({"T": 100})
+    dev.set_target(Pose(base=0.5))
+    fake2 = FakeSerial()
+    dev.serial_factory = lambda p, b: fake2
+    dev.run_once()                       # reopens -> booting; stale queue must be dropped
+    fake2.feed("RoArm-M2 started.\n")
+    dev.step()                           # boot marker -> boot done
+    fake2.tx.clear()
+    clock.advance(0.1); dev.step()
+    sent = fake2.sent()
+    assert all(s.get("T") not in (100, 102) for s in sent)
+    assert sent == [{"T": 105}]
+
+
 def test_start_stop_thread():
     dev, fake, clock = make()
     dev.start()

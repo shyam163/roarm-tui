@@ -149,6 +149,7 @@ class ArmDevice:
         self._last_rx = now
         self.connected = True
         self.booting = True
+        self.clear_queue()  # drop anything queued while unplugged/booting — stale after reboot
         self.on_line("sys", f"opened {self.port} — the arm resets and homes on connect")
         self.on_status("booting")
         return True
@@ -171,6 +172,7 @@ class ArmDevice:
 
     def _boot_done(self) -> None:
         self.booting = False
+        self.clear_queue()  # anything queued during boot never reached the (rebooted) arm
         self.on_status("ready")
 
     def _next_cmd(self, now: float) -> dict | None:
@@ -252,6 +254,7 @@ class SimDevice:
         self._stop.clear()
         self.connected = True
         self.booting = True
+        self.clear_queue()  # drop anything queued while unplugged/booting — stale after reboot
         self.on_line("sys", "simulator started")
         self.on_status("booting")
         self._thread = threading.Thread(target=self._run, name="roarm-sim", daemon=True)
@@ -283,6 +286,7 @@ class SimDevice:
     def _run(self) -> None:
         self._stop.wait(self.boot_time)
         self.booting = False
+        self.clear_queue()  # anything queued during boot never reached the (rebooted) arm
         self.on_status("ready")
         last = self.clock()
         while not self._stop.is_set():
