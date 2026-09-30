@@ -1,0 +1,181 @@
+Screen {
+    background: $background;
+}
+
+#status {
+    height: 1;
+    padding: 0 1;
+    background: $panel;
+}
+
+/* TabbedContent/TabPane default to height: auto, which lets tab content grow
+   past the visible screen (clipped or overlapping the docked Footer) instead of
+   sharing the space left after the Header/status bar/Footer. Bound them to the
+   remaining space so each tab's own height: 1fr panels can size correctly. */
+TabbedContent {
+    height: 1fr;
+}
+
+TabbedContent > ContentSwitcher {
+    height: 1fr;
+}
+
+TabPane {
+    height: 1fr;
+}
+
+.panel {
+    border: round $primary 50%;
+    border-title-color: $accent;
+    border-title-style: bold;
+    background: $surface;
+    padding: 0 1;
+}
+
+.row {
+    height: auto;
+    margin-top: 1;
+}
+
+.row > * {
+    margin-right: 1;
+}
+
+.field-label {
+    padding: 1 0 0 0;
+    color: $text-muted;
+}
+
+Select {
+    width: 16;
+}
+
+/* Control tab */
+#control-main {
+    height: 1fr;
+}
+
+#joints-panel {
+    width: 1fr;
+    min-width: 56;
+}
+
+JointSlider {
+    height: 1;
+    margin: 1 0 0 0;
+}
+
+JointSlider:focus {
+    background: $boost;
+}
+
+LoadBars {
+    height: 4;
+    margin-top: 1;
+}
+
+#arm-view {
+    width: 1fr;
+    height: 1fr;
+}
+
+#control-buttons {
+    height: auto;
+    padding: 0 1;
+}
+
+#control-buttons Button {
+    margin-right: 1;
+    width: 1fr;
+    min-width: 8;
+}
+
+/* Teach tab */
+#teach-main {
+    height: 1fr;
+}
+
+#wp-panel {
+    width: 2fr;
+}
+
+#wp-table {
+    height: 1fr;
+}
+
+#teach-side {
+    width: 1fr;
+    min-width: 36;
+}
+
+#teach-side > Button, #teach-side > Select, #teach-side > Input {
+    width: 100%;
+}
+
+#teach-side .row {
+    margin-top: 0;
+}
+
+#teach-side .row Button {
+    width: 1fr;
+}
+
+Button.small {
+    min-width: 5;
+    width: 5;
+}
+
+.small-input {
+    width: 12;
+}
+
+/* Diagnostics tab */
+#diag-main {
+    height: 1fr;
+}
+
+#log-panel {
+    width: 2fr;
+}
+
+#log {
+    height: 1fr;
+}
+
+#diag-side {
+    width: 1fr;
+    min-width: 32;
+}
+
+Sparkline {
+    height: 2;
+    margin-bottom: 1;
+}
+
+.section-title {
+    margin-top: 1;
+    text-style: bold;
+    color: $accent;
+}
+
+#diag-side Input, #diag-side Button {
+    width: 100%;
+}
+
+/* Modal */
+ConfirmScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#confirm-box {
+    width: 64;
+    height: auto;
+    border: thick $warning;
+    background: $surface;
+    padding: 1 2;
+}
+
+#confirm-box .row {
+    align-horizontal: right;
+}
