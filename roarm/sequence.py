@@ -111,3 +111,100 @@ class Recorder:
 
     def to_sequence(self, name: str = "recording") -> Sequence:
         return Sequence(name, "trajectory", list(self.points))
+
+
+class Player:
+    """Plays a Sequence. Pure state machine: call tick() periodically and send what it returns."""
+
+    def __init__(self, sequence: Sequence, speed: float = 1.0, loop: bool = False,
+                 tolerance: float = 0.05, move_timeout: float = 6.0):
+        if not sequence.points:
+            raise ValueError("sequence is empty")
+        self.sequence = sequence
+        self.speed = min(4.0, max(0.1, float(speed)))
+        self.loop = loop
+        self.tolerance = tolerance
+        self.move_timeout = move_timeout
+        self.running = False
+        self.index = 0
+        self._phase = "move"        # waypoints: move | dwell ; trajectory: move (approach) | stream
+        self._sent = False
+        self._phase_start = 0.0
+        self._t0 = 0.0
+
+    def start(self, now: float) -> None:
+        self.running = True
+        self.index = 0
+        self._phase = "move"
+        self._sent = False
+        self._phase_start = now
+
+    def stop(self) -> None:
+        self.running = False
+
+    def tick(self, now: float, pose: P.Pose | None) -> list[dict]:
+        if not self.running:
+            return []
+        if self.sequence.kind == "trajectory":
+            return self._tick_trajectory(now, pose)
+        return self._tick_waypoints(now, pose)
+
+    def _spd(self) -> int:
+        return min(4000, round(800 * self.speed))
+
+    def _move(self, now: float, pose: P.Pose | None, target: P.Pose) -> tuple[list[dict], bool]:
+        """Send the move once; report whether the target was reached (or timed out)."""
+        if not self._sent:
+            self._sent = True
+            self._phase_start = now
+            return [P.cmd_joints(target, spd=self._spd(), acc=10)], False
+        reached = pose is not None and pose.max_diff(target.clamped()) <= self.tolerance
+        return [], reached or now - self._phase_start >= self.move_timeout
+
+    def _tick_waypoints(self, now: float, pose: P.Pose | None) -> list[dict]:
+        point = self.sequence.points[self.index]
+        if self._phase == "move":
+            cmds, done = self._move(now, pose, point.pose)
+            if done:
+                self._phase = "dwell"
+                self._phase_start = now
+            else:
+                return cmds
+        if now - self._phase_start < point.dwell / self.speed:
+            return []
+        self.index += 1
+        if self.index >= len(self.sequence.points):
+            if not self.loop:
+                self.running = False
+                return []
+            self.index = 0
+        self._phase = "move"
+        self._sent = False
+        return self._tick_waypoints(now, pose)
+
+    def _tick_trajectory(self, now: float, pose: P.Pose | None) -> list[dict]:
+        points = self.sequence.points
+        if self._phase == "move":
+            cmds, done = self._move(now, pose, points[0].pose)
+            if not done:
+                return cmds
+            self._phase = "stream"
+            self._t0 = now
+            self.index = 0
+        elapsed = (now - self._t0) * self.speed
+        i = self.index
+        while i < len(points) and points[i].t <= elapsed:
+            i += 1
+        out = []
+        if i > self.index:
+            out.append(P.cmd_joints(points[i - 1].pose, spd=0, acc=0))
+            self.index = i
+        if self.index >= len(points):
+            if self.loop:
+                self._phase = "move"
+                self._sent = False
+                self.index = 0
+            else:
+                self.running = False
+                self.index = len(points) - 1
+        return out
