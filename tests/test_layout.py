@@ -71,3 +71,27 @@ async def test_diag_console_fully_onscreen(tmp_path, size):
         app.query_one("TabbedContent").active = "tab-diag"
         await pilot.pause()
         assert_onscreen(app, "#console", size)
+
+
+@pytest.mark.parametrize("size", SIZES)
+async def test_teach_stop_and_loop_row_fully_onscreen(tmp_path, size):
+    app = make_app(tmp_path)
+    async with app.run_test(size=size) as pilot:
+        await wait_for(pilot, lambda: app.state is not None)
+        app.query_one("TabbedContent").active = "tab-teach"
+        await pilot.pause()
+        for sel in ("#teach-play", "#teach-stop", "#teach-loop", "#teach-speed"):
+            assert_onscreen(app, sel, size)
+
+
+@pytest.mark.parametrize("sel", ["#seq-save", "#seq-load"])
+async def test_teach_save_and_load_reachable_at_80x24(tmp_path, sel):
+    size = (80, 24)
+    app = make_app(tmp_path)
+    async with app.run_test(size=size) as pilot:
+        await wait_for(pilot, lambda: app.state is not None)
+        app.query_one("TabbedContent").active = "tab-teach"
+        await pilot.pause()
+        app.query_one(sel).scroll_visible(animate=False)
+        await pilot.pause(0.2)
+        assert_onscreen(app, sel, size)

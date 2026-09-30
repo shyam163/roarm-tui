@@ -106,6 +106,7 @@ LoadBars {
 #teach-side {
     width: 1fr;
     min-width: 36;
+    overflow-y: auto;
 }
 
 #teach-side > Button, #teach-side > Select, #teach-side > Input {
@@ -118,6 +119,12 @@ LoadBars {
 
 #teach-side .row Button {
     width: 1fr;
+    min-width: 8;
+}
+
+#teach-side .row Select {
+    width: 1fr;
+    min-width: 8;
 }
 
 /* Waypoint buttons: first row shares the width evenly so "Clear all" is never clipped at 80 cols. */
