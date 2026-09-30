@@ -176,6 +176,7 @@ class Player:
         if self.index >= len(self.sequence.points):
             if not self.loop:
                 self.running = False
+                self.index = len(self.sequence.points) - 1
                 return []
             self.index = 0
         self._phase = "move"

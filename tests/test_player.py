@@ -36,6 +36,15 @@ def test_waypoints_move_wait_dwell_advance():
     assert not p.running
 
 
+def test_waypoints_index_stays_in_range_after_finish():
+    p = Player(waypoints(dwell=0.0))
+    p.start(0.0)
+    p.tick(0.0, A)
+    p.tick(0.1, A)                          # point 0 reached, dwell 0 -> sends point 1
+    p.tick(0.2, B)                          # point 1 reached, dwell 0 -> finished
+    assert not p.running and p.index == len(p.sequence.points) - 1
+
+
 def test_speed_scales_dwell_and_spd():
     p = Player(waypoints(dwell=1.0), speed=2.0)
     p.start(0.0)
@@ -88,3 +97,12 @@ def test_trajectory_speed():
     p.start(0.0)
     p.tick(0.0, A); p.tick(0.01, A)         # approach reached at 0.01 -> t0
     assert p.tick(0.07, A)[0]["base"] == 0.1   # elapsed 0.12 at 2x
+
+
+def test_trajectory_index_stays_in_range_after_finish():
+    p = Player(trajectory())
+    p.start(0.0)
+    p.tick(0.0, B)                          # approach sent
+    p.tick(1.0, A)                          # reached -> streaming starts, sends t=0 point
+    p.tick(1.25, A)                         # skips to newest due point (t=0.2) -> finished
+    assert not p.running and p.index == len(p.sequence.points) - 1
