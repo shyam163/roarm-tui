@@ -130,6 +130,7 @@ class DiagTab(Container):
             self.notify(f"Invalid JSON: {e}", severity="error")
             return
         self.app.device.send(cmd)
+        self.app.needs_sync = True  # console is RAW — resync the jog target to the next feedback
         console = self.query_one("#console", HistoryInput)
         console.add_history(text)
         console.value = ""

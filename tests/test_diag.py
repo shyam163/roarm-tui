@@ -1,7 +1,10 @@
+import math
 import time
 
+import pytest
 from textual.widgets import Checkbox, Input, RichLog
 
+from roarm import protocol as P
 from roarm.app import RoArmApp
 from roarm.device import SimDevice
 from roarm.ui.diag import DiagTab, HistoryInput, is_poll
@@ -107,6 +110,28 @@ async def test_sparklines_update(tmp_path):
             tab.add_loads({"base": 0, "shoulder": 100, "elbow": 50, "hand": 0})
         await pilot.pause()
         assert 100 in list(tab.query_one("#spark-shoulder").data)
+
+
+async def test_console_send_resyncs_jog_target(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        tab = await open_diag(pilot, app)
+        app.device.stop()                # halt the sim thread; drive feedback manually below
+        app.device.connected = True      # still "connected" for readiness purposes
+        assert app.needs_sync is False   # already synced from the initial connect
+        console = tab.query_one("#console", Input)
+        console.focus()
+        console.value = '{"T":102,"base":1.0,"shoulder":0,"elbow":1.57,"hand":3.14,"spd":0,"acc":10}'
+        await pilot.press("enter")
+        assert app.needs_sync is True    # raw console send marks the target stale
+        # the next feedback frame reports the arm has moved to the commanded pose
+        app._handle_state(P.ArmState(P.HOME.with_joint("base", 1.0), 0, 0, 0, {}, time.monotonic()))
+        assert app.needs_sync is False
+        assert app.target.base == pytest.approx(1.0)
+        app.set_focus(None)               # console keeps focus after submit
+        before = app.target.base
+        await pilot.press("d")            # jog + on base (selected by default)
+        assert app.target.base == pytest.approx(before + math.radians(app.step_deg))
 
 
 def test_history_input_standalone():

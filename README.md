@@ -24,3 +24,8 @@ Mouse-driven terminal control for the Waveshare RoArm-M2-S over USB serial.
 | `q` | quit |
 
 Sequences are saved in `sequences/*.json`.
+
+The Diagnostics tab's JSON console is a **raw** tool: commands typed there are
+sent to the arm unmodified (no clamping, no target tracking). The jog target
+resyncs to the next feedback frame afterwards, but the console itself will
+happily send anything valid JSON, including out-of-range joint angles.
