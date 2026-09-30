@@ -238,3 +238,37 @@ async def test_configure_wifi_refused_while_usb_booting(tmp_path):
         usb.booting = True
         assert app.configure_wifi("home", "pw") is False
         assert sent == [] and app._wifi_probe_timer is None
+
+
+async def test_background_usb_reset_while_on_wifi_stops_playback_and_toasts(tmp_path):
+    app, hub = make(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        await pilot.press("c")
+        await wait_for(pilot, lambda: hub.active == "wifi" and app.ready)
+        assert app.start_playback(Sequence("s", "waypoints", [Point(P.HOME.with_joint("base", 1.0), 5.0)]))
+        notes = []
+        real_notify = app.notify
+        app.notify = lambda m, *a, **k: (notes.append((m, k.get("severity"))), real_notify(m, *a, **k))[1]
+        hub.devices["usb"].on_status("booting")          # someone replugged / reopened USB
+        await wait_for(pilot, lambda: not app.player.running)
+        assert any("USB reconnected" in m and sev == "error" for m, sev in notes)
+        app._handle_background_status("usb", "booting")     # synchronous view: not ready until fresh feedback
+        assert not app.ready and app.state is None and app.needs_sync
+        app.torque_on = False
+        hub.devices["usb"].on_status("ready")
+        await wait_for(pilot, lambda: app.torque_on)
+
+
+async def test_background_cannot_open_is_ignored_and_other_statuses_only_logged(tmp_path):
+    app, hub = make(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        await pilot.press("c")
+        await wait_for(pilot, lambda: hub.active == "wifi" and app.ready)
+        notes = []
+        app.notify = lambda m, *a, **k: notes.append(m)
+        hub.devices["usb"].on_status("cannot open /dev/ttyUSB0: nope")
+        hub.devices["usb"].on_status("disconnected")
+        await pilot.pause(0.2)
+        assert notes == [] and app.ready

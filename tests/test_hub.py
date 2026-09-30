@@ -93,3 +93,37 @@ def test_add_after_stop_does_not_start():
     late = SimDevice(boot_time=0.0, rate=100)
     hub.add("wifi", late)
     assert late._thread is None
+
+
+def test_inactive_sys_lines_relayed_with_transport_prefix():
+    hub, usb, wifi = make()
+    hub.switch("wifi")
+    usb.on_line("sys", "opened /dev/ttyUSB0 — the arm resets")
+    assert ("sys", "[usb] opened /dev/ttyUSB0 — the arm resets") in hub.lines
+    hub.lines.clear()
+    hub.switch("usb")
+    wifi.on_line("sys", "reached the arm")
+    assert hub.lines == [("sys", "[wifi] reached the arm")]
+
+
+def test_inactive_tx_rx_and_state_not_relayed():
+    hub, usb, wifi = make()
+    hub.switch("wifi")
+    usb.on_line("tx", '{"T":105}')
+    usb.on_line("rx", "{}")
+    usb.step(0.05)
+    assert hub.lines == [] and hub.states == []
+
+
+def test_inactive_status_goes_to_background_callback():
+    hub, usb, wifi = make()
+    seen = []
+    hub.on_background_status = lambda name, status: seen.append((name, status))
+    hub.statuses.clear()
+    hub.switch("wifi")
+    hub.statuses.clear()
+    usb.on_status("booting")
+    assert seen == [("usb", "booting")]
+    assert hub.statuses == []
+    wifi.on_status("online")           # active: normal path, not background
+    assert hub.statuses == ["online"] and seen == [("usb", "booting")]

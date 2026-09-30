@@ -44,6 +44,9 @@ network**. The arm keeps its hotspot as a fallback; the IP it gets is saved to
 .venv/bin/roarm --wifi 192.168.1.59 --no-usb   # Wi-Fi only; never opens USB (no reset)
 ```
 
+Note: `roarm --wifi` with the USB cable attached still opens USB, and opening USB resets
+the arm (it homes itself). Use `--no-usb` to avoid that.
+
 | Key | Action |
 |---|---|
 | `c` | switch between USB and Wi-Fi control |

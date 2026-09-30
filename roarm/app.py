@@ -121,6 +121,8 @@ class RoArmApp(App):
         self.device.on_state = lambda s: self._post(self._handle_state, s)
         self.device.on_line = lambda d, t: self._post(self._handle_line, d, t)
         self.device.on_status = lambda t: self._post(self._handle_status, t)
+        if isinstance(self.device, DeviceHub):
+            self.device.on_background_status = lambda n, t: self._post(self._handle_background_status, n, t)
         self.device.start()
         self.set_interval(0.05, self._tick)
         self.set_interval(0.25, self._refresh_status)
@@ -197,6 +199,26 @@ class RoArmApp(App):
             self.notify(f"Now controlling the arm over {DeviceHub.LABELS.get(name, name)}")
         elif text.startswith("cannot open") and text != previous:
             self.notify(text, severity="error", timeout=6, markup=False)
+        self._refresh_status()
+
+    def _handle_background_status(self, name: str, text: str) -> None:
+        """Status from a transport that is not the active one."""
+        if text.startswith("cannot open"):
+            return
+        if name == "usb" and text == "booting":
+            # the USB port was (re)opened, which resets the arm — whatever we were doing is void
+            if self.player is not None and self.player.running:
+                self.stop_playback()
+            self.state = None
+            self.needs_sync = True
+            self.notify("USB reconnected — the arm is resetting and will home itself", severity="error")
+        elif name == "usb" and text == "ready":
+            self.torque_on = True       # the arm rebooted with torque on
+            try:
+                self.query_one(TeachTab).set_torque(True)
+            except NoMatches:
+                pass
+        self._handle_line("sys", f"[{name}] {text}")
         self._refresh_status()
 
     # --- periodic -----------------------------------------------------------

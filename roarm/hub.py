@@ -25,6 +25,7 @@ class DeviceHub:
         self.on_state: Callable = _noop
         self.on_line: Callable = _noop
         self.on_status: Callable = _noop
+        self.on_background_status: Callable = _noop   # (name, status) from an inactive transport
         self._started = False
         for name, dev in devices.items():
             self._attach(name, dev)
@@ -41,6 +42,12 @@ class DeviceHub:
         # current when it actually arrives, not when it was scheduled.
         if name == self.active:
             getattr(self, callback)(*args)
+        elif callback == "on_line" and args[0] == "sys":
+            # inactive tx/rx would flood the log with polls; system messages (e.g. a
+            # USB reset while we're on Wi-Fi) must stay visible. on_state stays dropped.
+            self.on_line("sys", f"[{name}] {args[1]}")
+        elif callback == "on_status":
+            self.on_background_status(name, args[0])
 
     # --- the active device's view ---------------------------------------------
     @property
