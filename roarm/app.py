@@ -79,6 +79,7 @@ class RoArmApp(App):
         self._last_warn: dict[str, float] = {}
         self._wifi_probe_timer = None
         self._wifi_probes_left = 0
+        self._torque_sync_pending = False   # reconcile torque_on with the next frame's torque fields
 
     @property
     def fresh(self) -> bool:
@@ -147,6 +148,14 @@ class RoArmApp(App):
     def _handle_state(self, state: P.ArmState) -> None:
         self.state = state
         self._last_state_time = time.monotonic()
+        if self._torque_sync_pending:
+            self._torque_sync_pending = False
+            if state.torque is not None:
+                self.torque_on = all(state.torque.values())
+                try:
+                    self.query_one(TeachTab).set_torque(self.torque_on)
+                except NoMatches:
+                    pass
         playing = self.player is not None and self.player.running
         if self.needs_sync or self.follow_feedback or not self.torque_on or playing:
             self.target = state.pose
@@ -187,6 +196,7 @@ class RoArmApp(App):
         elif text == "online":
             # Wi-Fi reachable: the arm did NOT reboot, so torque is whatever it was
             self.needs_sync = True
+            self._torque_sync_pending = True
             self.notify("Arm reachable over Wi-Fi")
         elif text.startswith("switched:"):
             name = text.split(":", 1)[1]
@@ -195,6 +205,7 @@ class RoArmApp(App):
             self.follow_feedback = False
             self.state = None
             self.needs_sync = True
+            self._torque_sync_pending = True
             self._last_state_time = 0.0
             self.notify(f"Now controlling the arm over {DeviceHub.LABELS.get(name, name)}")
         elif text.startswith("cannot open") and text != previous:
@@ -214,6 +225,7 @@ class RoArmApp(App):
             self.notify("USB reconnected — the arm is resetting and will home itself", severity="error")
         elif name == "usb" and text == "ready":
             self.torque_on = True       # the arm rebooted with torque on
+            self._torque_sync_pending = True
             try:
                 self.query_one(TeachTab).set_torque(True)
             except NoMatches:

@@ -272,3 +272,33 @@ async def test_background_cannot_open_is_ignored_and_other_statuses_only_logged(
         hub.devices["usb"].on_status("disconnected")
         await pilot.pause(0.2)
         assert notes == [] and app.ready
+
+
+def _state(torque):
+    return P.ArmState(P.HOME, 0.0, 0.0, 0.0, {j: 0 for j in P.JOINTS}, time.monotonic(), torque=torque)
+
+
+@pytest.mark.parametrize("event", ["online", "switched:wifi"])
+async def test_torque_flag_reconciled_from_first_frame_after_online_or_switch(tmp_path, event):
+    app, hub = make(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        app.torque_on = True
+        app._handle_status(event)
+        app._handle_state(_state({j: False for j in P.JOINTS}))
+        assert app.torque_on is False
+        # one-shot: a later frame does not overwrite what the user chose
+        app.torque_on = True
+        app._handle_state(_state({j: False for j in P.JOINTS}))
+        assert app.torque_on is True
+
+
+async def test_torque_reconcile_flag_cleared_by_frame_without_torque_fields(tmp_path):
+    app, hub = make(tmp_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await wait_for(pilot, lambda: app.ready)
+        app._handle_status("online")
+        app._handle_state(_state(None))
+        assert app.torque_on is True
+        app._handle_state(_state({j: False for j in P.JOINTS}))
+        assert app.torque_on is True
