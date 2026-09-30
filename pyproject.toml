@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "roarm-tui"
+version = "0.1.0"
+description = "Terminal UI for the Waveshare RoArm-M2-S robotic arm"
+requires-python = ">=3.11"
+dependencies = ["textual>=8,<9", "pyserial>=3.5"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+roarm = "roarm.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["roarm*"]
+
+[tool.setuptools.package-data]
+"roarm.ui" = ["*.tcss"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
